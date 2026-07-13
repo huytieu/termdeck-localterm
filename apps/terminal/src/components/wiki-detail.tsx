@@ -20,6 +20,64 @@ const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p);
 const dirOf = (p: string): string =>
   p.startsWith("/") ? p.slice(0, p.lastIndexOf("/")) || "/" : "/";
 
+interface Frontmatter {
+  fields: { key: string; value: string }[];
+  body: string;
+}
+
+// Split a leading YAML frontmatter block (`---` … `---`) from the markdown body.
+// react-markdown otherwise renders the block as a thematic break + a run-on
+// paragraph; we lift it into a metadata card instead. Intentionally shallow: one
+// `key: value` per line, quotes stripped, `[a, b]` flattened — enough for the
+// common note/blog frontmatter, not a full YAML parser.
+const parseFrontmatter = (raw: string): Frontmatter => {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
+  if (!match) return { fields: [], body: raw };
+  const fields: { key: string; value: string }[] = [];
+  for (const line of match[1].split(/\r?\n/)) {
+    const colon = line.indexOf(":");
+    if (colon < 0) continue;
+    const key = line.slice(0, colon).trim();
+    if (!key) continue;
+    let value = line.slice(colon + 1).trim();
+    value = value.replace(/^["']|["']$/g, "");
+    value = value.replace(/^\[(.*)\]$/, (_m, inner) =>
+      inner
+        .split(",")
+        .map((s: string) => s.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean)
+        .join(", "),
+    );
+    fields.push({ key, value });
+  }
+  return { fields, body: raw.slice(match[0].length) };
+};
+
+const FrontmatterCard = ({ fields }: { fields: { key: string; value: string }[] }) => {
+  if (fields.length === 0) return null;
+  const title = fields.find((f) => f.key.toLowerCase() === "title")?.value;
+  const rest = fields.filter((f) => f.key.toLowerCase() !== "title");
+  return (
+    <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
+      {title ? (
+        <div className="mb-2 font-sans text-base font-semibold leading-snug text-foreground">
+          {title}
+        </div>
+      ) : null}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        {rest.map((f) => (
+          <div key={f.key} className="contents">
+            <dt className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+              {f.key}
+            </dt>
+            <dd className="min-w-0 break-words text-[11px] text-foreground/90">{f.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+};
+
 // Floating "Ask AI" popover shown over a text selection in the rendered/source
 // view. The user types a prompt; on submit a Claude Code session spawns in the
 // file's directory seeded with the prompt + the selected text.
@@ -311,9 +369,15 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
               className="h-full w-full border-0 bg-white"
             />
           ) : markdown && !showSource ? (
-            <div className="mx-auto max-w-3xl px-6 py-5 font-mono text-xs">
-              <Markdown>{result.content}</Markdown>
-            </div>
+            (() => {
+              const { fields, body } = parseFrontmatter(result.content);
+              return (
+                <div className="mx-auto max-w-3xl px-6 py-5 font-mono text-xs">
+                  <FrontmatterCard fields={fields} />
+                  <Markdown>{body}</Markdown>
+                </div>
+              );
+            })()
           ) : (
             <div className="py-3">
               <SourceView path={result.path} content={result.content} focusLine={line} />

@@ -952,7 +952,12 @@ export const Terminal = () => {
     // (and its iframe-tile bridge) can render it directly.
     const fileLinkDisposable = terminal.registerLinkProvider(
       new FileLinkProvider(terminal, (match) => {
-        const raw = match.path;
+        // Normalize the clicked token to an absolute path the drawer can render:
+        // strip a leading "./", keep absolute/`~` paths as-is (server expands
+        // `~`), and anchor a relative path to the live session cwd. The `:line`
+        // suffix rides along so the drawer's source view can focus it.
+        let raw = match.path;
+        if (raw.startsWith("./")) raw = raw.slice(2);
         const cwd = liveCwdRef.current;
         const absolute =
           raw.startsWith("/") || raw.startsWith("~")
@@ -960,7 +965,7 @@ export const Terminal = () => {
             : cwd
               ? `${cwd.replace(/\/$/, "")}/${raw}`
               : raw;
-        openFileInWiki(absolute);
+        openFileInWiki(absolute, match.line ?? undefined);
       }),
     );
 

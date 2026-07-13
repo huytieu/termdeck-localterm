@@ -1,9 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { openWikiFile, useShell, WIKI_OPEN_MESSAGE } from "@/hooks/use-shell";
+import {
+  closeArtifact,
+  openArtifact,
+  openWikiFile,
+  useShell,
+  WIKI_OPEN_MESSAGE,
+} from "@/hooks/use-shell";
 import { ActivityBar } from "@/components/activity-bar";
 import { TermSidebar } from "@/components/term-sidebar";
 import { WikiSidebar } from "@/components/wiki-sidebar";
 import { WikiDetail } from "@/components/wiki-detail";
+import { ArtifactDrawer } from "@/components/artifact-drawer";
 import { Grid } from "@/components/grid";
 import { Terminal } from "@/components/terminal";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -14,34 +21,66 @@ const SIDEBAR_MAX = 640;
 const SIDEBAR_DEFAULT = 256;
 const SIDEBAR_STORAGE_KEY = "termdeck:sidebarWidth";
 
+const ARTIFACT_MIN = 360;
+const ARTIFACT_DEFAULT = 720;
+const ARTIFACT_STORAGE_KEY = "termdeck:artifactWidth";
+
 const readStoredWidth = (): number => {
   const saved = Number(window.localStorage.getItem(SIDEBAR_STORAGE_KEY));
   return saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT;
 };
 
-// The TermDeck VS Code shell: activity bar (mode) -> resizable contextual subnav
-// (session list / file tree) -> detail (terminal, grid, or rendered file).
-export const Shell = () => {
-  const { mode, sid, wikiPath, wikiLine } = useShell();
-  const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth);
-  const draggingRef = useRef(false);
+const readStoredArtifactWidth = (): number => {
+  const saved = Number(window.localStorage.getItem(ARTIFACT_STORAGE_KEY));
+  return saved >= ARTIFACT_MIN ? saved : ARTIFACT_DEFAULT;
+};
 
-  // Drag the divider to resize the subnav; persist across reloads.
+// The TermDeck VS Code shell: activity bar (mode) -> resizable contextual subnav
+// (session list / file tree) -> detail (terminal, grid, or rendered file). A
+// clicked terminal file-path opens the artifact drawer on the right WITHOUT
+// leaving the current view — the terminal stays mounted underneath.
+export const Shell = () => {
+  const { mode, sid, wikiPath, wikiLine, artifactPath, artifactLine } = useShell();
+  const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth);
+  const [artifactWidth, setArtifactWidth] = useState(readStoredArtifactWidth);
+  const [artifactExpanded, setArtifactExpanded] = useState(false);
+  // "sidebar" or "artifact" while a divider is being dragged, else null.
+  const draggingRef = useRef<null | "sidebar" | "artifact">(null);
+
   useEffect(() => {
     const onMove = (event: MouseEvent) => {
-      if (!draggingRef.current) return;
-      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, event.clientX - ACTIVITY_BAR_WIDTH));
-      setSidebarWidth(next);
+      if (draggingRef.current === "sidebar") {
+        const next = Math.min(
+          SIDEBAR_MAX,
+          Math.max(SIDEBAR_MIN, event.clientX - ACTIVITY_BAR_WIDTH),
+        );
+        setSidebarWidth(next);
+      } else if (draggingRef.current === "artifact") {
+        // The drawer is anchored right; its width grows as the handle moves left.
+        const next = Math.min(
+          window.innerWidth - 200,
+          Math.max(ARTIFACT_MIN, window.innerWidth - event.clientX),
+        );
+        setArtifactWidth(next);
+      }
     };
     const onUp = () => {
-      if (!draggingRef.current) return;
-      draggingRef.current = false;
+      const which = draggingRef.current;
+      if (!which) return;
+      draggingRef.current = null;
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
-      setSidebarWidth((width) => {
-        window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(width));
-        return width;
-      });
+      if (which === "sidebar") {
+        setSidebarWidth((width) => {
+          window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(width));
+          return width;
+        });
+      } else {
+        setArtifactWidth((width) => {
+          window.localStorage.setItem(ARTIFACT_STORAGE_KEY, String(width));
+          return width;
+        });
+      }
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -51,20 +90,20 @@ export const Shell = () => {
     };
   }, []);
 
-  const startDrag = () => {
-    draggingRef.current = true;
+  const startDrag = (which: "sidebar" | "artifact") => () => {
+    draggingRef.current = which;
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
   };
 
   // A file clicked inside an embedded terminal tile (iframe) posts here; open it
-  // in the wiki view. Same-origin only.
+  // in the artifact drawer (never navigate). Same-origin only.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
-      const data = event.data as { type?: string; path?: string } | null;
+      const data = event.data as { type?: string; path?: string; line?: number | null } | null;
       if (data?.type === WIKI_OPEN_MESSAGE && typeof data.path === "string") {
-        openWikiFile(data.path);
+        openArtifact(data.path, data.line ?? undefined);
       }
     };
     window.addEventListener("message", onMessage);
@@ -93,12 +132,12 @@ export const Shell = () => {
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize sidebar"
-            onMouseDown={startDrag}
+            onMouseDown={startDrag("sidebar")}
             className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-ring/50"
           />
         </>
       ) : null}
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="relative flex min-w-0 flex-1 flex-col">
         {mode === "settings" ? (
           <SettingsPanel />
         ) : mode === "term" ? (
@@ -114,6 +153,42 @@ export const Shell = () => {
             Select a file from the tree.
           </div>
         )}
+
+        {/* Artifact drawer overlays the right side so the terminal underneath
+            keeps its size (no navigation, no reflow-to-zero). Full-screen mode
+            covers the whole detail area; the terminal stays mounted behind it. */}
+        {artifactPath ? (
+          <div
+            className="absolute inset-y-0 right-0 z-20 flex"
+            style={{ width: artifactExpanded ? "100%" : `${artifactWidth}px`, maxWidth: "100%" }}
+          >
+            {!artifactExpanded && (
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize artifact"
+                onMouseDown={startDrag("artifact")}
+                className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-ring/50"
+              />
+            )}
+            <div className="min-w-0 flex-1">
+              <ArtifactDrawer
+                path={artifactPath}
+                line={artifactLine}
+                expanded={artifactExpanded}
+                onToggleExpand={() => setArtifactExpanded((v) => !v)}
+                onOpenInWiki={() => {
+                  openWikiFile(artifactPath, artifactLine ?? undefined);
+                  closeArtifact();
+                }}
+                onClose={() => {
+                  setArtifactExpanded(false);
+                  closeArtifact();
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
       </main>
     </div>
   );
