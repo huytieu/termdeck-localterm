@@ -17,6 +17,9 @@ export const TAILSCALE_STATUS_TIMEOUT_MS = 5_000;
 export const PROXY_LIVENESS_PROBE_TIMEOUT_MS = 300;
 export const TAILSCALE_HTTPS_PORT = 443;
 export const TAILSCALE_BINARY_PATHS = [
+  // User-local wrapper first: a userspace tailscaled (no sudo) needs
+  // `--socket` on every invocation, and this wrapper is where that lives.
+  `${process.env.HOME ?? ""}/.localterm/bin/tailscale`,
   "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
   "/usr/local/bin/tailscale",
   "/opt/homebrew/bin/tailscale",

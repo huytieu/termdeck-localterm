@@ -214,6 +214,7 @@ vi.mock("@xterm/xterm", () => {
     loadAddon = () => {};
     open = () => {};
     refresh = () => {};
+    registerLinkProvider = () => ({ dispose: () => {} });
     onData = (handler: (data: string) => void) => {
       this.dataListeners.add(handler);
       return { dispose: () => this.dataListeners.delete(handler) };

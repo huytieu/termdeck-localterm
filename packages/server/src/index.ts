@@ -179,6 +179,7 @@ import { encodeClick, encodeDrag, encodeMove, encodeScroll } from "./utils/sgr-m
 import { getBufferedAmount, type ClientSocket } from "./utils/ws-socket.js";
 import { resolveStaticAsset } from "./static-resolver.js";
 import { resolveImageAsset } from "./utils/resolve-image-asset.js";
+import { imageContentTypeFor } from "./utils/image-extensions.js";
 import { sweepStaleWorktrees } from "./utils/worktree-sweep.js";
 import {
   readWorktreeIncludeFile,
@@ -1459,6 +1460,112 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
       headers["content-security-policy"] = "default-src 'none'; style-src 'unsafe-inline'";
     }
     return new Response(new Uint8Array(asset.body), { status: 200, headers });
+  });
+
+  // JSON companion to /file for the terminal's file-preview surface (clicked
+  // file paths in output). Content always ships inside JSON — never as raw
+  // bytes — so a repo file can never reach the browser with a sniffable
+  // content type from this origin (the same XSS concern /file guards against).
+  // Unlike /file, absolute and ~/ paths are accepted: this daemon already
+  // hands out unrestricted shells, so reading a file is not an escalation.
+  // `..` segments are still rejected so a logged URL states its real target.
+  const FILE_TEXT_MAX_BYTES = 1024 * 1024;
+  const FILE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+  const FILE_DIRECTORY_MAX_ENTRIES = 300;
+
+  const resolveFileTextPath = (cwd: string, rawPath: string | undefined): string | null => {
+    if (!rawPath) return null;
+    let candidate = rawPath;
+    if (candidate === "~" || candidate.startsWith("~/")) {
+      candidate = path.join(os.homedir(), candidate.slice(1));
+    }
+    if (candidate.split("/").some((segment) => segment === "..")) return null;
+    return path.resolve(cwd, candidate);
+  };
+
+  api.get("/file/text", (context) => {
+    const cwd = resolveCwdQuery(context.req.query("cwd"));
+    if (!cwd) return context.json({ error: "invalid_cwd" }, HTTP_STATUS_BAD_REQUEST);
+    const filePath = resolveFileTextPath(cwd, context.req.query("path"));
+    if (!filePath) return context.json({ error: "invalid_path" }, HTTP_STATUS_BAD_REQUEST);
+
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(filePath);
+    } catch {
+      return context.json({ error: "not_found" }, HTTP_STATUS_NOT_FOUND);
+    }
+
+    if (stats.isDirectory()) {
+      try {
+        const names = fs.readdirSync(filePath);
+        const entries = names.slice(0, FILE_DIRECTORY_MAX_ENTRIES).map((name) => {
+          let isDirectory = false;
+          try {
+            isDirectory = fs.statSync(path.join(filePath, name)).isDirectory();
+          } catch {
+            // Broken symlink or permission hole: list it as a plain entry.
+          }
+          return { name, isDirectory };
+        });
+        entries.sort(
+          (a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name),
+        );
+        return context.json({
+          kind: "directory",
+          path: filePath,
+          entries,
+          truncated: names.length > FILE_DIRECTORY_MAX_ENTRIES,
+        });
+      } catch {
+        return context.json({ error: "unreadable" }, HTTP_STATUS_NOT_FOUND);
+      }
+    }
+    if (!stats.isFile()) return context.json({ error: "not_found" }, HTTP_STATUS_NOT_FOUND);
+
+    const imageContentType = imageContentTypeFor(filePath);
+    if (imageContentType) {
+      if (stats.size > FILE_IMAGE_MAX_BYTES) {
+        return context.json({ kind: "binary", path: filePath, size: stats.size });
+      }
+      try {
+        const body = fs.readFileSync(filePath);
+        return context.json({
+          kind: "image",
+          path: filePath,
+          size: stats.size,
+          dataUrl: `data:${imageContentType};base64,${body.toString("base64")}`,
+        });
+      } catch {
+        return context.json({ error: "unreadable" }, HTTP_STATUS_NOT_FOUND);
+      }
+    }
+
+    let handle: number;
+    try {
+      handle = fs.openSync(filePath, "r");
+    } catch {
+      return context.json({ error: "unreadable" }, HTTP_STATUS_NOT_FOUND);
+    }
+    try {
+      const readLength = Math.min(stats.size, FILE_TEXT_MAX_BYTES);
+      const body = Buffer.alloc(readLength);
+      const bytesRead = fs.readSync(handle, body, 0, readLength, 0);
+      const slice = body.subarray(0, bytesRead);
+      // NUL byte in the head = binary; don't ship megabytes of mojibake.
+      if (slice.subarray(0, 8192).includes(0)) {
+        return context.json({ kind: "binary", path: filePath, size: stats.size });
+      }
+      return context.json({
+        kind: "text",
+        path: filePath,
+        size: stats.size,
+        truncated: stats.size > FILE_TEXT_MAX_BYTES,
+        content: slice.toString("utf8"),
+      });
+    } finally {
+      fs.closeSync(handle);
+    }
   });
 
   const readJsonBody = async (context: { req: { json: () => Promise<unknown> } }) => {

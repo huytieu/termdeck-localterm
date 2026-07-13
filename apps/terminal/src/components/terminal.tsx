@@ -58,6 +58,7 @@ import { AutomationsButton } from "@/components/automations-menu";
 import { AutomationsModal } from "@/components/automations-modal";
 import { CommandPalette, type CommandItem } from "@/components/command-palette";
 import { DiffViewer } from "@/components/diff-viewer";
+import { FilePreviewModal, type FilePreviewTarget } from "@/components/file-preview";
 import { KeepAwakeMenu, type CaffeinateMode } from "@/components/keep-awake-menu";
 import { PortsButton } from "@/components/ports-menu";
 import { PortsModal } from "@/components/ports-modal";
@@ -148,6 +149,7 @@ import { detectIsMacPlatform } from "@/utils/detect-is-mac-platform";
 import { detectLikelyKeepAwakeSupported } from "@/utils/detect-likely-keep-awake-supported";
 import { formatDiffCount } from "@/utils/format-diff-count";
 import { shellQuoteArg } from "@/utils/shell-quote-arg";
+import { FileLinkProvider } from "@/utils/file-link-provider";
 import { buildFileUrl } from "@/utils/build-file-url";
 import { isAutomationsShortcut } from "@/utils/is-automations-shortcut";
 import { isBinaryMessageData } from "@/utils/is-binary-message-data";
@@ -650,6 +652,7 @@ export const Terminal = () => {
   >("Notification" in window ? Notification.permission : "unsupported");
   const [liveCwd, setLiveCwd] = useState<string | null>(null);
   const liveCwdRef = useRef<string | null>(null);
+  const [filePreviewTarget, setFilePreviewTarget] = useState<FilePreviewTarget | null>(null);
   const wsConnectedRef = useRef(false);
   const isMac = useMemo(detectIsMacPlatform, []);
   // Keep-awake (caffeinate) is daemon-owned global state: the server is the
@@ -938,6 +941,13 @@ export const Terminal = () => {
     terminal.loadAddon(searchAddon);
     searchAddonRef.current = searchAddon;
     const searchResultsDisposable = searchAddon.onDidChangeResults(setSearchResults);
+    // File-path-looking tokens in output become clickable and open the
+    // preview modal (WebLinksAddon above keeps handling real URLs).
+    const fileLinkDisposable = terminal.registerLinkProvider(
+      new FileLinkProvider(terminal, (match) =>
+        setFilePreviewTarget({ path: match.path, line: match.line }),
+      ),
+    );
 
     terminal.open(container);
 
@@ -2131,6 +2141,7 @@ export const Terminal = () => {
         trackEl.removeEventListener("pointerdown", handleTrackPointerDown);
       }
       searchResultsDisposable.dispose();
+      fileLinkDisposable.dispose();
       scrollDisposable.dispose();
       ptyViewportResizeDisposable.dispose();
       kittyPushDisposable.dispose();
@@ -3251,6 +3262,21 @@ export const Terminal = () => {
         }}
         onRefreshBranchInfo={refreshBranchInfo}
         onDiffSummaryUpdate={setGitDiffSummary}
+      />
+
+      <FilePreviewModal
+        open={filePreviewTarget !== null}
+        cwd={liveCwd}
+        target={filePreviewTarget}
+        onClose={() => setFilePreviewTarget(null)}
+        onOpenInEditor={(filePath, lineNumber) => {
+          if (!liveCwd) return;
+          setFilePreviewTarget(null);
+          openShellAt(
+            liveCwd,
+            `nvim ${lineNumber != null ? `+${lineNumber} ` : ""}${shellQuoteArg(filePath)} && exit`,
+          );
+        }}
       />
 
       <AutomationsModal

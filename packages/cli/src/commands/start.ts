@@ -37,6 +37,7 @@ import { pollForDaemonReady } from "../utils/poll-for-daemon-ready.js";
 import { reportCliError } from "../utils/report-cli-error.js";
 import { announceResolvedUrl, resolveDaemonUrl } from "../utils/portless.js";
 import type { ResolveUrlResult } from "../utils/portless.js";
+import { resolveTailscaleRoute } from "../utils/tailscale.js";
 import { probeCdpAvailability } from "../utils/probe-cdp-availability.js";
 import { readConfiguredCdpPort } from "../utils/read-configured-cdp-port.js";
 import { runStartPreflight } from "../utils/run-start-preflight.js";
@@ -309,6 +310,34 @@ const runStartInForeground = async (options: StartOptions): Promise<void> => {
   // daemon is tailnet-fronted for mobile access.
   server.setPublicUrl(resolved.url);
   server.setLocalUrl(resolved.localUrl);
+  // Boot-order race fix: when the daemon starts before tailscaled is ready
+  // (launchd offers no ordering between the two agents), the resolution above
+  // pins the public surface to loopback/portless and every tailnet request
+  // then 403s against the live host allowlist — forever, since nothing
+  // re-resolves. Keep polling in the background and adopt the tailnet URL the
+  // moment Tailscale comes up. Remote surface only: localUrl stays loopback so
+  // automation run tabs never ride a flapping tailnet.
+  if (resolved.surface !== "tailnet") {
+    const TAILNET_ADOPT_INTERVAL_MS = 5_000;
+    const TAILNET_ADOPT_MAX_ATTEMPTS = 60;
+    let adoptAttempts = 0;
+    const adoptTimer = setInterval(() => {
+      adoptAttempts += 1;
+      void resolveTailscaleRoute(server.port)
+        .then((route) => {
+          if (route.url) {
+            server.setPublicUrl(route.url);
+            clearInterval(adoptTimer);
+          } else if (adoptAttempts >= TAILNET_ADOPT_MAX_ATTEMPTS) {
+            clearInterval(adoptTimer);
+          }
+        })
+        .catch(() => {
+          if (adoptAttempts >= TAILNET_ADOPT_MAX_ATTEMPTS) clearInterval(adoptTimer);
+        });
+    }, TAILNET_ADOPT_INTERVAL_MS);
+    adoptTimer.unref();
+  }
   if (isRunningAsDaemonChild()) {
     console.log(`${kleur.green("✔")} daemon listening on ${resolved.url} (pid ${process.pid})`);
     announceResolvedUrl(resolved.url, resolved.surface);
