@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type IPty } from "node-pty";
@@ -50,6 +50,21 @@ interface SessionEvents {
   "git-dirty": [];
   "automation-exit": [code: number];
 }
+
+// Default working directory when a caller spawns a session without one. Honors
+// LOCALTERM_DEFAULT_CWD (set to the vault in the LaunchAgent) so "New session"
+// opens where you actually work; falls back to $HOME if unset or not a dir.
+const resolveDefaultCwd = (): string => {
+  const configured = process.env.LOCALTERM_DEFAULT_CWD;
+  if (configured) {
+    try {
+      if (statSync(configured).isDirectory()) return configured;
+    } catch {
+      /* configured dir missing -> fall through to home */
+    }
+  }
+  return os.homedir();
+};
 
 export class Session extends EventEmitter<SessionEvents> {
   readonly shell: string;
@@ -114,7 +129,7 @@ export class Session extends EventEmitter<SessionEvents> {
     this.shellName = path.basename(this.shell);
     this.shellProcessNames.add(this.shellName);
     this.shellProcessNames.add(this.shell);
-    this.cwd = input.cwd ?? os.homedir();
+    this.cwd = input.cwd ?? resolveDefaultCwd();
     this.currentCols = input.cols ?? DEFAULT_COLS;
     this.currentRows = input.rows ?? DEFAULT_ROWS;
     this.createdAt = Date.now();

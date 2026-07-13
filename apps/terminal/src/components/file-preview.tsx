@@ -25,13 +25,13 @@ interface DirectoryEntry {
   isDirectory: boolean;
 }
 
-type FilePreviewContent =
+export type FilePreviewContent =
   | { kind: "text"; path: string; size: number; truncated: boolean; content: string }
   | { kind: "image"; path: string; size: number; dataUrl: string }
   | { kind: "binary"; path: string; size: number }
   | { kind: "directory"; path: string; entries: DirectoryEntry[]; truncated: boolean };
 
-type FileTextResponse = FilePreviewContent | { error: string };
+export type FileTextResponse = FilePreviewContent | { error: string };
 
 interface FilePreviewModalProps {
   open: boolean;
@@ -41,15 +41,15 @@ interface FilePreviewModalProps {
   onOpenInEditor: (path: string, line: number | null) => void;
 }
 
-const isMarkdownPath = (filePath: string): boolean => /\.(md|mdx|markdown)$/i.test(filePath);
+export const isMarkdownPath = (filePath: string): boolean => /\.(md|mdx|markdown)$/i.test(filePath);
 
-const formatSize = (size: number): string => {
+export const formatSize = (size: number): string => {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const ERROR_MESSAGES: Record<string, string> = {
+export const ERROR_MESSAGES: Record<string, string> = {
   invalid_cwd: "The session's working directory is gone.",
   invalid_path: "That path can't be previewed.",
   not_found: "File not found.",
@@ -59,7 +59,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 // Syntax-highlighted read-only source pane with line numbers. Highlights and
 // scrolls to `focusLine` (1-based) when set — the `:42` suffix of a clicked
 // compiler diagnostic.
-const SourceView = ({
+export const SourceView = ({
   path,
   content,
   focusLine,

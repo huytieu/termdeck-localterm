@@ -429,6 +429,7 @@ export const HTTP_STATUS_NOT_FOUND = 404;
 export const HTTP_STATUS_BAD_REQUEST = 400;
 export const HTTP_STATUS_ACCEPTED = 202;
 export const HTTP_STATUS_CONFLICT = 409;
+export const HTTP_STATUS_BAD_GATEWAY = 502;
 
 // Git diff endpoints. The summary endpoint is polled by the browser every few
 // seconds, so every limit here exists to keep one poll cheap and to keep a

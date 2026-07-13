@@ -71,6 +71,7 @@ import { SessionsModal } from "@/components/sessions-modal";
 import { SettingsMenu } from "@/components/settings-menu";
 import { WorktreesButton } from "@/components/worktrees-menu";
 import { WorktreesModal } from "@/components/worktrees-modal";
+import { openFileInWiki } from "@/hooks/use-shell";
 import { useGitBranchInfo } from "@/hooks/use-git-branch-info";
 import { useGitDiffSummary } from "@/hooks/use-git-diff-summary";
 import { useScreenWakeLock } from "@/hooks/use-screen-wake-lock";
@@ -941,12 +942,22 @@ export const Terminal = () => {
     terminal.loadAddon(searchAddon);
     searchAddonRef.current = searchAddon;
     const searchResultsDisposable = searchAddon.onDidChangeResults(setSearchResults);
-    // File-path-looking tokens in output become clickable and open the
-    // preview modal (WebLinksAddon above keeps handling real URLs).
+    // File-path-looking tokens in output become clickable and open the file in
+    // the wiki view (WebLinksAddon above keeps handling real URLs). Resolve the
+    // token to an absolute path against the live session cwd so the wiki pane
+    // (and its iframe-tile bridge) can render it directly.
     const fileLinkDisposable = terminal.registerLinkProvider(
-      new FileLinkProvider(terminal, (match) =>
-        setFilePreviewTarget({ path: match.path, line: match.line }),
-      ),
+      new FileLinkProvider(terminal, (match) => {
+        const raw = match.path;
+        const cwd = liveCwdRef.current;
+        const absolute =
+          raw.startsWith("/") || raw.startsWith("~")
+            ? raw
+            : cwd
+              ? `${cwd.replace(/\/$/, "")}/${raw}`
+              : raw;
+        openFileInWiki(absolute);
+      }),
     );
 
     terminal.open(container);

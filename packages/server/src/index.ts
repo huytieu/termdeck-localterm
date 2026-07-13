@@ -48,6 +48,7 @@ import {
   GIT_DIRTY_THROTTLE_MS,
   GIT_MAX_REF_LENGTH,
   HTTP_STATUS_ACCEPTED,
+  HTTP_STATUS_BAD_GATEWAY,
   HTTP_STATUS_BAD_REQUEST,
   HTTP_STATUS_CONFLICT,
   HTTP_STATUS_CREATED,
@@ -1482,6 +1483,22 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     if (candidate.split("/").some((segment) => segment === "..")) return null;
     return path.resolve(cwd, candidate);
   };
+
+  // Root directory for the wiki file tree — the configured default cwd (the
+  // vault via LOCALTERM_DEFAULT_CWD), falling back to $HOME. The tree then reads
+  // it and drills down through /file/text's directory listings.
+  api.get("/wiki/root", (context) => {
+    const configured = process.env.LOCALTERM_DEFAULT_CWD;
+    let root = os.homedir();
+    if (configured) {
+      try {
+        if (fs.statSync(configured).isDirectory()) root = configured;
+      } catch {
+        /* configured dir missing -> home */
+      }
+    }
+    return context.json({ root });
+  });
 
   api.get("/file/text", (context) => {
     const cwd = resolveCwdQuery(context.req.query("cwd"));
@@ -3153,6 +3170,42 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
       };
     }),
   );
+
+  // TermDeck wiki surface: reverse-proxy /files/* to the wiki-viewer sidecar so
+  // it lives under this daemon's origin (one tailnet URL, no cross-origin). The
+  // sidecar is expected to run with Next basePath "/files" so its asset/link
+  // URLs already carry the prefix; we forward the full path unchanged. Inert
+  // unless TERMDECK_WIKI_UPSTREAM is set (e.g. http://127.0.0.1:3418).
+  const wikiUpstream = process.env.TERMDECK_WIKI_UPSTREAM?.replace(/\/$/, "");
+  if (wikiUpstream) {
+    app.all("/files/*", async (context) => {
+      const incoming = new URL(context.req.url);
+      const target = `${wikiUpstream}${incoming.pathname}${incoming.search}`;
+      const headers = new Headers(context.req.raw.headers);
+      headers.delete("host");
+      headers.delete("accept-encoding");
+      const method = context.req.method;
+      const init: RequestInit = { method, headers, redirect: "manual" };
+      if (method !== "GET" && method !== "HEAD") {
+        init.body = context.req.raw.body;
+        // Node fetch requires duplex when streaming a request body.
+        (init as RequestInit & { duplex: "half" }).duplex = "half";
+      }
+      try {
+        const upstream = await fetch(target, init);
+        const responseHeaders = new Headers(upstream.headers);
+        responseHeaders.delete("content-encoding");
+        responseHeaders.delete("content-length");
+        return new Response(upstream.body, {
+          status: upstream.status,
+          statusText: upstream.statusText,
+          headers: responseHeaders,
+        });
+      } catch {
+        return context.text("wiki sidecar unavailable", HTTP_STATUS_BAD_GATEWAY);
+      }
+    });
+  }
 
   if (staticRoot) {
     app.get("*", (context) => {
