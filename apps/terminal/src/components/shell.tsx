@@ -6,6 +6,7 @@ import { WikiSidebar } from "@/components/wiki-sidebar";
 import { WikiDetail } from "@/components/wiki-detail";
 import { Grid } from "@/components/grid";
 import { Terminal } from "@/components/terminal";
+import { SettingsPanel } from "@/components/settings-panel";
 
 const ACTIVITY_BAR_WIDTH = 48; // w-12
 const SIDEBAR_MIN = 180;
@@ -70,24 +71,37 @@ export const Shell = () => {
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
+  // Settings is a full-width detail surface with no contextual subnav.
+  const hasSidebar = mode === "term" || mode === "wiki";
+
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
       <ActivityBar mode={mode} />
-      <aside
-        className="flex shrink-0 flex-col border-r border-border bg-background"
-        style={{ width: `${sidebarWidth}px` }}
-      >
-        {mode === "term" ? <TermSidebar activeSid={sid} /> : <WikiSidebar activePath={wikiPath} />}
-      </aside>
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize sidebar"
-        onMouseDown={startDrag}
-        className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-ring/50"
-      />
+      {hasSidebar ? (
+        <>
+          <aside
+            className="flex shrink-0 flex-col border-r border-border bg-background"
+            style={{ width: `${sidebarWidth}px` }}
+          >
+            {mode === "term" ? (
+              <TermSidebar activeSid={sid} />
+            ) : (
+              <WikiSidebar activePath={wikiPath} />
+            )}
+          </aside>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize sidebar"
+            onMouseDown={startDrag}
+            className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-ring/50"
+          />
+        </>
+      ) : null}
       <main className="flex min-w-0 flex-1 flex-col">
-        {mode === "term" ? (
+        {mode === "settings" ? (
+          <SettingsPanel />
+        ) : mode === "term" ? (
           sid ? (
             <Terminal key={sid} />
           ) : (

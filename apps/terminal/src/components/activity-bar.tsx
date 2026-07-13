@@ -1,4 +1,4 @@
-import { BookText, SquareTerminal } from "lucide-react";
+import { BookText, Settings, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { switchMode, type ShellMode } from "@/hooks/use-shell";
 
@@ -45,5 +45,14 @@ export const ActivityBar = ({ mode }: { mode: ShellMode }) => (
       icon={<BookText className="size-5" />}
       onClick={() => switchMode("wiki")}
     />
+    {/* Settings pinned to the bottom, VS Code style. */}
+    <div className="mt-auto w-full">
+      <Item
+        active={mode === "settings"}
+        label="Settings"
+        icon={<Settings className="size-5" />}
+        onClick={() => switchMode("settings")}
+      />
+    </div>
   </nav>
 );

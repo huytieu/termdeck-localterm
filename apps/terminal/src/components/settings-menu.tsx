@@ -106,6 +106,10 @@ interface SettingsMenuProps {
   latestVersion: string | null;
   onOpenChange?: (open: boolean) => void;
   onClose?: () => void;
+  // When true, render the settings body inline (full-height panel, no gear
+  // button / modal / backdrop) for the activity-bar Settings tab. The modal
+  // (default) is the terminal-toolbar gear.
+  inline?: boolean;
 }
 
 const SECTION_LABEL_CLASSES =
@@ -381,6 +385,7 @@ export const SettingsMenu = ({
   latestVersion,
   onOpenChange,
   onClose,
+  inline = false,
 }: SettingsMenuProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -504,72 +509,10 @@ export const SettingsMenu = ({
   };
 
   const isVisible = isOpen && settled;
-  const cdpDisconnected = cdpStatus !== null && !cdpStatus.connected;
 
-  return (
-    <>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="terminal settings"
-        className="relative hover:text-foreground"
-        onClick={() => handleOpenChange(!isOpen)}
-      >
-        <Settings />
-        {/* The amber CDP-disconnected dot yields to the sky update dot when both
-            apply so the gear shows a single, unambiguous “look here” indicator;            the CDP state is still surfaced inside the panel. */}
-        {cdpDisconnected && !updateAvailable && (
-          <span
-            aria-hidden="true"
-            className="absolute right-1 top-1 size-1.5 rounded-full bg-amber-400"
-          />
-        )}
-        {updateAvailable && (
-          <span
-            aria-hidden="true"
-            className="absolute right-1 top-1 size-1.5 rounded-full bg-sky-400"
-          />
-        )}
-      </Button>
-      {mounted
-        ? createPortal(
-            <div className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]">
-              <div
-                data-open={isVisible || undefined}
-                data-closed={!isVisible || undefined}
-                className={cn(COMMAND_PALETTE_BACKDROP_CLASSES)}
-                onClick={() => handleOpenChange(false)}
-              />
-              <div
-                ref={panelRef}
-                role="dialog"
-                aria-label="settings"
-                aria-modal
-                tabIndex={-1}
-                data-open={isVisible || undefined}
-                data-closed={!isVisible || undefined}
-                className={cn(
-                  "relative z-10 flex w-[480px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl outline-none origin-top",
-                  MODAL_PANEL_CLASSES,
-                  COMMAND_PALETTE_PANEL_CLASSES,
-                )}
-                style={{ maxHeight: SETTINGS_MODAL_MAX_HEIGHT_CSS }}
-              >
-                <div className="flex items-center justify-between gap-2 border-b border-border/40 px-4 py-2.5">
-                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <Settings className="size-4 text-muted-foreground" aria-hidden="true" />
-                    Settings
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="close"
-                    className="hover:text-foreground"
-                    onClick={() => handleOpenChange(false)}
-                  >
-                    <X />
-                  </Button>
-                </div>
+  // The scrollable settings body — shared verbatim by the modal (default)
+  // and the inline activity-bar Settings tab.
+  const bodyContent = (
                 <div className="flex-1 overflow-y-auto overscroll-contain p-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   <FieldGroup className="gap-3">
                     {updateAvailable && latestVersion ? (
@@ -1028,6 +971,88 @@ export const SettingsMenu = ({
                     ) : null}
                   </FieldGroup>
                 </div>
+  );
+
+  // Inline mode (activity-bar Settings tab): the body fills the detail pane,
+  // no gear trigger, no portal, no backdrop.
+  if (inline) {
+    return (
+      <div className="flex h-full flex-col bg-background">
+        <div className="flex items-center gap-2 border-b border-border/40 px-4 py-2.5 text-sm font-medium text-foreground">
+          <Settings className="size-4 text-muted-foreground" aria-hidden="true" />
+          Settings
+        </div>
+        {bodyContent}
+      </div>
+    );
+  }
+  const cdpDisconnected = cdpStatus !== null && !cdpStatus.connected;
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="terminal settings"
+        className="relative hover:text-foreground"
+        onClick={() => handleOpenChange(!isOpen)}
+      >
+        <Settings />
+        {/* The amber CDP-disconnected dot yields to the sky update dot when both
+            apply so the gear shows a single, unambiguous “look here” indicator;            the CDP state is still surfaced inside the panel. */}
+        {cdpDisconnected && !updateAvailable && (
+          <span
+            aria-hidden="true"
+            className="absolute right-1 top-1 size-1.5 rounded-full bg-amber-400"
+          />
+        )}
+        {updateAvailable && (
+          <span
+            aria-hidden="true"
+            className="absolute right-1 top-1 size-1.5 rounded-full bg-sky-400"
+          />
+        )}
+      </Button>
+      {mounted
+        ? createPortal(
+            <div className="fixed inset-0 z-50 flex items-start justify-center pt-[18vh]">
+              <div
+                data-open={isVisible || undefined}
+                data-closed={!isVisible || undefined}
+                className={cn(COMMAND_PALETTE_BACKDROP_CLASSES)}
+                onClick={() => handleOpenChange(false)}
+              />
+              <div
+                ref={panelRef}
+                role="dialog"
+                aria-label="settings"
+                aria-modal
+                tabIndex={-1}
+                data-open={isVisible || undefined}
+                data-closed={!isVisible || undefined}
+                className={cn(
+                  "relative z-10 flex w-[480px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl outline-none origin-top",
+                  MODAL_PANEL_CLASSES,
+                  COMMAND_PALETTE_PANEL_CLASSES,
+                )}
+                style={{ maxHeight: SETTINGS_MODAL_MAX_HEIGHT_CSS }}
+              >
+                <div className="flex items-center justify-between gap-2 border-b border-border/40 px-4 py-2.5">
+                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <Settings className="size-4 text-muted-foreground" aria-hidden="true" />
+                    Settings
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="close"
+                    className="hover:text-foreground"
+                    onClick={() => handleOpenChange(false)}
+                  >
+                    <X />
+                  </Button>
+                </div>
+                {bodyContent}
               </div>
             </div>,
             document.body,

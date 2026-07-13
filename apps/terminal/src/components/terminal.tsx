@@ -71,7 +71,7 @@ import { SessionsModal } from "@/components/sessions-modal";
 import { SettingsMenu } from "@/components/settings-menu";
 import { WorktreesButton } from "@/components/worktrees-menu";
 import { WorktreesModal } from "@/components/worktrees-modal";
-import { openFileInWiki } from "@/hooks/use-shell";
+import { openFileInWiki, isEmbedded } from "@/hooks/use-shell";
 import { useGitBranchInfo } from "@/hooks/use-git-branch-info";
 import { useGitDiffSummary } from "@/hooks/use-git-diff-summary";
 import { useScreenWakeLock } from "@/hooks/use-screen-wake-lock";
@@ -2883,7 +2883,11 @@ export const Terminal = () => {
   return (
     <div
       ref={rootRef}
-      className="h-dvh w-dvw"
+      // Embed tiles (grid iframes) fill the iframe viewport; inside the shell the
+      // terminal must fill its flex `<main>` parent (and shrink below content via
+      // min-w-0) so a sidebar resize reflows the grid — w-dvw would pin it to the
+      // viewport and overflow the main pane.
+      className={isEmbedded() ? "h-dvh w-dvw" : "h-full w-full min-h-0 min-w-0"}
       style={{
         background: pageBackground,
         paddingTop: "env(safe-area-inset-top, 0px)",
