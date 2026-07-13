@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder, FolderOpen, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { openWikiFile } from "@/hooks/use-shell";
 import { fetchSessions } from "@/lib/deck-session";
@@ -8,6 +8,52 @@ interface Entry {
   name: string;
   isDirectory: boolean;
 }
+
+interface SearchHit {
+  path: string;
+  line: number;
+  snippet: string;
+}
+
+// Debounced full-text search over the vault via GET /api/wiki/search (ripgrep).
+const useWikiSearch = (query: string) => {
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) {
+      setHits(null);
+      setSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    setSearching(true);
+    const timer = window.setTimeout(() => {
+      const url = new URL("/api/wiki/search", window.location.href);
+      url.searchParams.set("q", trimmed);
+      void fetch(url, { signal: controller.signal })
+        .then(async (response) => {
+          const body = (await response.json()) as { results: SearchHit[] };
+          if (controller.signal.aborted) return;
+          setHits(body.results ?? []);
+          setSearching(false);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) {
+            setHits([]);
+            setSearching(false);
+          }
+        });
+    }, 200);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  return { hits, searching };
+};
 
 // Fetch a directory's immediate children via /api/file/text (kind: directory).
 const fetchDir = async (root: string, dirPath: string, signal?: AbortSignal): Promise<Entry[]> => {
@@ -98,6 +144,9 @@ const TreeNode = ({
 export const WikiSidebar = ({ activePath }: { activePath: string | null }) => {
   const [root, setRoot] = useState<string | null>(null);
   const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [query, setQuery] = useState("");
+  const { hits, searching } = useWikiSearch(query);
+  const searchActive = query.trim().length >= 2;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -144,20 +193,81 @@ export const WikiSidebar = ({ activePath }: { activePath: string | null }) => {
           {rootName ? `EXPLORER · ${rootName}` : "EXPLORER"}
         </span>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto py-1">
-        {root && entries?.map((entry) => (
-          <TreeNode
-            key={entry.name}
-            root={root}
-            path={`${root}/${entry.name}`}
-            name={entry.name}
-            isDirectory={entry.isDirectory}
-            depth={0}
-            activePath={activePath}
+      <div className="shrink-0 px-2 pb-2">
+        <div className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2">
+          <Search className="size-3.5 shrink-0 text-muted-foreground/60" />
+          <input
+            value={query}
+            placeholder="Search vault…"
+            aria-label="search vault"
+            className="h-7 w-full bg-transparent font-mono text-xs outline-none placeholder:text-muted-foreground/50"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQuery("");
+            }}
           />
-        ))}
-        {entries?.length === 0 && (
-          <div className="px-3 py-6 text-center font-mono text-xs text-muted-foreground/60">empty</div>
+          {query && (
+            <button
+              type="button"
+              aria-label="clear search"
+              className="shrink-0 text-muted-foreground/60 hover:text-foreground"
+              onClick={() => setQuery("")}
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto py-1">
+        {searchActive ? (
+          searching && hits === null ? (
+            <div className="px-3 py-4 text-center font-mono text-[11px] text-muted-foreground/60">
+              searching…
+            </div>
+          ) : hits && hits.length > 0 ? (
+            hits.map((hit, i) => {
+              const name = hit.path.slice(hit.path.lastIndexOf("/") + 1);
+              return (
+                <button
+                  key={`${hit.path}:${hit.line}:${i}`}
+                  type="button"
+                  title={`${hit.path}:${hit.line}`}
+                  className="flex w-full flex-col gap-0.5 border-b border-border/30 px-3 py-1.5 text-left hover:bg-accent/40"
+                  onClick={() => openWikiFile(hit.path, hit.line)}
+                >
+                  <span className="flex items-center gap-1.5 truncate font-mono text-[11px] text-foreground">
+                    <File className="size-3 shrink-0 text-muted-foreground/50" />
+                    {name}
+                    <span className="text-muted-foreground/50">:{hit.line}</span>
+                  </span>
+                  <span className="truncate pl-4 font-mono text-[10px] text-muted-foreground/70">
+                    {hit.snippet}
+                  </span>
+                </button>
+              );
+            })
+          ) : (
+            <div className="px-3 py-4 text-center font-mono text-[11px] text-muted-foreground/60">
+              no matches
+            </div>
+          )
+        ) : (
+          <>
+            {root && entries?.map((entry) => (
+              <TreeNode
+                key={entry.name}
+                root={root}
+                path={`${root}/${entry.name}`}
+                name={entry.name}
+                isDirectory={entry.isDirectory}
+                depth={0}
+                activePath={activePath}
+              />
+            ))}
+            {entries?.length === 0 && (
+              <div className="px-3 py-6 text-center font-mono text-xs text-muted-foreground/60">empty</div>
+            )}
+          </>
         )}
       </div>
     </div>

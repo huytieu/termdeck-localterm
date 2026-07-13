@@ -39,17 +39,35 @@ export const fetchPane = async (id: string, lines: number, signal?: AbortSignal)
 
 // Spawn a new detached (pinned) session. Returns its id so the caller can drill
 // straight into it. cwd omitted -> the daemon's default working directory.
-export const createSession = async (): Promise<string> => {
+export const createSession = async (cwd?: string): Promise<string> => {
   const response = await fetch("/api/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: "{}",
+    body: JSON.stringify(cwd ? { cwd } : {}),
   });
   if (!response.ok) throw new Error(`create: ${response.status}`);
   const body = (await response.json()) as { session?: DeckSession };
   const id = body.session?.id;
   if (!id) throw new Error("create: no session id");
   return id;
+};
+
+// Spawn a Claude Code session seeded with a prompt + a text selection from a
+// wiki file (highlight-to-AI). The server composes the command safely.
+export const createAiSessionFromWiki = async (input: {
+  path: string;
+  selection: string;
+  prompt: string;
+}): Promise<string> => {
+  const response = await fetch("/api/wiki/ai-session", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(`ai-session: ${response.status}`);
+  const body = (await response.json()) as { id?: string };
+  if (!body.id) throw new Error("ai-session: no session id");
+  return body.id;
 };
 
 // Kill (close) a session by id — the grid's tile close/right-click action.

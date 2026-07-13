@@ -1594,6 +1594,194 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     }
   };
 
+  // Write-back companion to GET /file/text — the wiki edit mode saves here. Same
+  // path resolution + `..` rejection as the read side; the target must already
+  // exist as a regular file (edit, never create-anywhere) and stay text-sized.
+  // The daemon already hands out unrestricted shells, so writing a file the user
+  // opened is not an escalation, but we still refuse binaries and oversize bodies.
+  api.put("/file/text", async (context) => {
+    const cwd = resolveCwdQuery(context.req.query("cwd"));
+    if (!cwd) return context.json({ error: "invalid_cwd" }, HTTP_STATUS_BAD_REQUEST);
+    const filePath = resolveFileTextPath(cwd, context.req.query("path"));
+    if (!filePath) return context.json({ error: "invalid_path" }, HTTP_STATUS_BAD_REQUEST);
+    const body = await readJsonBody(context);
+    const content = (body as { content?: unknown } | undefined)?.content;
+    if (typeof content !== "string") {
+      return context.json({ error: "invalid_body" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    if (Buffer.byteLength(content, "utf8") > FILE_TEXT_MAX_BYTES) {
+      return context.json({ error: "too_large" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(filePath);
+    } catch {
+      return context.json({ error: "not_found" }, HTTP_STATUS_NOT_FOUND);
+    }
+    if (!stats.isFile()) return context.json({ error: "not_found" }, HTTP_STATUS_NOT_FOUND);
+    try {
+      fs.writeFileSync(filePath, content, "utf8");
+    } catch {
+      return context.json({ error: "unwritable" }, HTTP_STATUS_NOT_FOUND);
+    }
+    return context.json({ ok: true, path: filePath, size: Buffer.byteLength(content, "utf8") });
+  });
+
+  // Full-text search over the wiki root (LOCALTERM_DEFAULT_CWD, else $HOME) for
+  // the wiki search box. Prefers ripgrep (respects .gitignore, fast); falls back
+  // to `grep -rIn` when rg isn't on PATH. Fixed-string, case-insensitive; caps
+  // matches so a broad query can't stream megabytes. Never runs a shell — args
+  // are passed as an argv array so the query can't inject.
+  const WIKI_SEARCH_MAX_RESULTS = 200;
+  api.get("/wiki/search", async (context) => {
+    const query = (context.req.query("q") ?? "").trim();
+    if (query.length < 2) return context.json({ results: [], truncated: false });
+    const configured = process.env.LOCALTERM_DEFAULT_CWD;
+    let root = os.homedir();
+    if (configured) {
+      try {
+        if (fs.statSync(configured).isDirectory()) root = configured;
+      } catch {
+        /* configured dir missing -> home */
+      }
+    }
+    // Hard-bound every search: a slow tool (grep over a big tree) is killed at
+    // WIKI_SEARCH_TIMEOUT_MS and we return whatever landed, so the endpoint can
+    // never hang the request.
+    // Generous cap: grep (the fallback when ripgrep is absent) crawls the whole
+    // tree, which is slow on a large cold vault. The frontend shows "searching…".
+    const WIKI_SEARCH_TIMEOUT_MS = 15000;
+    const runSearch = (cmd: string, args: string[]): Promise<{ code: number; out: string }> =>
+      new Promise((resolve) => {
+        let child: ReturnType<typeof spawn>;
+        try {
+          child = spawn(cmd, args, { cwd: root });
+        } catch {
+          resolve({ code: -1, out: "" });
+          return;
+        }
+        let out = "";
+        let settled = false;
+        const finish = (code: number) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve({ code, out });
+        };
+        const timer = setTimeout(() => {
+          try {
+            child.kill();
+          } catch {
+            /* already gone */
+          }
+          finish(0);
+        }, WIKI_SEARCH_TIMEOUT_MS);
+        child.stdout?.on("data", (chunk: Buffer) => {
+          out += chunk.toString("utf8");
+          if (out.length > 512 * 1024) {
+            out = out.slice(0, 512 * 1024);
+            child.kill();
+            finish(0);
+          }
+        });
+        child.on("error", () => finish(-1));
+        child.on("close", (code) => finish(code ?? 0));
+      });
+    // Prefer ripgrep (respects .gitignore, fast); the ENOENT fallback is grep
+    // with explicit directory excludes so it never crawls node_modules/.git/etc.
+    // (there is no .gitignore honoring in grep). Both: fixed-string, case-
+    // insensitive, line-numbered, 3 matches/file, skip binaries.
+    const IGNORE_DIRS = [".git", "node_modules", ".obsidian", "dist", "build", ".next", ".venv"];
+    const rgArgs = [
+      "--line-number",
+      "--no-heading",
+      "--color=never",
+      "--fixed-strings",
+      "--ignore-case",
+      "--max-count=3",
+      "--max-columns=240",
+      "--",
+      query,
+      ".",
+    ];
+    let result = await runSearch("rg", rgArgs);
+    if (result.code === -1) {
+      result = await runSearch("grep", [
+        "-rIn",
+        "-m",
+        "3",
+        "-F",
+        "-i",
+        ...IGNORE_DIRS.map((d) => `--exclude-dir=${d}`),
+        "--",
+        query,
+        ".",
+      ]);
+    }
+    const results: { path: string; line: number; snippet: string }[] = [];
+    for (const raw of result.out.split("\n")) {
+      if (!raw) continue;
+      // "<relpath>:<line>:<text>" — split on the first two colons only.
+      const firstColon = raw.indexOf(":");
+      const secondColon = raw.indexOf(":", firstColon + 1);
+      if (firstColon < 0 || secondColon < 0) continue;
+      const rel = raw.slice(0, firstColon);
+      const lineNum = Number(raw.slice(firstColon + 1, secondColon));
+      if (!Number.isFinite(lineNum)) continue;
+      const snippet = raw.slice(secondColon + 1).trim().slice(0, 240);
+      results.push({ path: path.resolve(root, rel), line: lineNum, snippet });
+      if (results.length >= WIKI_SEARCH_MAX_RESULTS) break;
+    }
+    return context.json({ results, truncated: results.length >= WIKI_SEARCH_MAX_RESULTS });
+  });
+
+  // Highlight-to-AI: spawn a Claude Code session in the file's directory, seeded
+  // with the user's prompt + the highlighted selection. The prompt/selection are
+  // written to a temp markdown file and passed via command substitution
+  // (`claude "$(cat <tmp>)"`) so arbitrary quotes/newlines in the selection can
+  // never break out of the argument — no shell-escaping of user text on our part.
+  api.post("/wiki/ai-session", async (context) => {
+    const body = (await readJsonBody(context)) as
+      | { path?: unknown; selection?: unknown; prompt?: unknown }
+      | undefined;
+    const rawPath = typeof body?.path === "string" ? body.path : "";
+    const selection = typeof body?.selection === "string" ? body.selection : "";
+    const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+    if (!prompt) return context.json({ error: "invalid_prompt" }, HTTP_STATUS_BAD_REQUEST);
+    // Resolve the file's directory as the session cwd (absolute path expected).
+    const filePath = resolveFileTextPath(os.homedir(), rawPath);
+    let cwd = os.homedir();
+    if (filePath) {
+      const dir = path.dirname(filePath);
+      try {
+        if (fs.statSync(dir).isDirectory()) cwd = dir;
+      } catch {
+        /* dir gone -> home */
+      }
+    }
+    if (registry.atCapacity()) {
+      return context.json({ error: "capacity" }, HTTP_STATUS_CONFLICT);
+    }
+    const contextDoc =
+      selection.trim().length > 0
+        ? `${prompt}\n\n---\nSelected from ${rawPath || "a file"}:\n\n${selection}\n`
+        : `${prompt}\n`;
+    const tmpFile = path.join(os.tmpdir(), `termdeck-ai-${randomUUID()}.md`);
+    try {
+      fs.writeFileSync(tmpFile, contextDoc, "utf8");
+    } catch {
+      return context.json({ error: "tmp_write_failed" }, HTTP_STATUS_NOT_FOUND);
+    }
+    // `claude "$(cat tmp)"` seeds the interactive session with the prompt; then
+    // clean the temp file. Newlines/quotes in the selection are safe inside the
+    // double-quoted substitution. `rm -f` runs after claude exits.
+    const initialCommand = `claude "$(cat ${tmpFile})"; rm -f ${tmpFile}`;
+    const id = registry.spawnDetached({ cwd, initialCommand }, true, ownerFor(context));
+    if (!id) return context.json({ error: "capacity" }, HTTP_STATUS_CONFLICT);
+    registry.setTitleById(id, "AI · from wiki", ownerFor(context));
+    return context.json({ id }, HTTP_STATUS_CREATED);
+  });
+
   // Resolve a worktree path (create target / remove target). Relative paths are
   // anchored to the caller's cwd so the client can pass a project-relative name;
   // absolute paths pass through. No traversal/containment check — the daemon

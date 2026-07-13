@@ -22,7 +22,7 @@ const readStoredWidth = (): number => {
 // The TermDeck VS Code shell: activity bar (mode) -> resizable contextual subnav
 // (session list / file tree) -> detail (terminal, grid, or rendered file).
 export const Shell = () => {
-  const { mode, sid, wikiPath } = useShell();
+  const { mode, sid, wikiPath, wikiLine } = useShell();
   const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth);
   const draggingRef = useRef(false);
 
@@ -108,7 +108,7 @@ export const Shell = () => {
             <Grid />
           )
         ) : wikiPath ? (
-          <WikiDetail key={wikiPath} path={wikiPath} />
+          <WikiDetail key={wikiPath} path={wikiPath} line={wikiLine} />
         ) : (
           <div className="flex h-full items-center justify-center font-mono text-sm text-muted-foreground">
             Select a file from the tree.
