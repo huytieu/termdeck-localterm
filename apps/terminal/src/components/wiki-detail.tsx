@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { File, FileText, Folder, Globe, Pencil, Sparkles, SquareTerminal } from "lucide-react";
+import { File, FileText, Folder, Globe, Link2, Pencil, Sparkles, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Markdown } from "@/components/markdown";
 import { openSession, openWikiFile } from "@/hooks/use-shell";
-import { createSession, createAiSessionFromWiki } from "@/lib/deck-session";
+import { createSession, chatAboutSelection } from "@/lib/deck-session";
+
+const SESSION_BASE_DIR_KEY = "termdeck:sessionBaseDir";
 import { CsvView } from "@/components/csv-view";
 import {
   ERROR_MESSAGES,
@@ -86,11 +88,15 @@ const FrontmatterCard = ({ fields }: { fields: { key: string; value: string }[] 
 const AiSelectionPopover = ({
   path,
   selection,
+  line,
+  sourceSid,
   anchor,
   onClose,
 }: {
   path: string;
   selection: string;
+  line: number | null;
+  sourceSid: string | null;
   anchor: { top: number; left: number };
   onClose: () => void;
 }) => {
@@ -109,12 +115,21 @@ const AiSelectionPopover = ({
     setBusy(true);
     setError(null);
     try {
-      const id = await createAiSessionFromWiki({ path, selection, prompt: trimmed });
+      const baseDir = window.localStorage.getItem(SESSION_BASE_DIR_KEY) || undefined;
+      const { id } = await chatAboutSelection({
+        sessionId: sourceSid,
+        path,
+        selection,
+        prompt: trimmed,
+        line,
+        baseDir,
+      });
       onClose();
+      // Focus the session the chat landed in (the linked one, or the fresh spawn).
       openSession(id);
     } catch {
       setBusy(false);
-      setError("Couldn't start the session.");
+      setError("Couldn't send the message.");
     }
   };
 
@@ -126,7 +141,7 @@ const AiSelectionPopover = ({
     >
       <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-medium text-muted-foreground">
         <Sparkles className="size-3.5 text-accent-foreground" />
-        Start an AI session on the selection
+        {sourceSid ? "Chat about this in the linked session" : "Start an AI session on the selection"}
       </div>
       <input
         ref={inputRef}
@@ -143,11 +158,11 @@ const AiSelectionPopover = ({
       {error ? <div className="mt-1 px-1 text-[10px] text-amber-400">{error}</div> : null}
       <div className="mt-1.5 flex items-center justify-between gap-2 px-1">
         <span className="truncate text-[10px] text-muted-foreground/60">
-          {selection.length} chars selected
+          {selection.length} chars · {sourceSid ? "→ linked session" : "→ new session"}
         </span>
         <Button size="xs" disabled={busy || !prompt.trim()} onClick={() => void submit()}>
           {busy ? <Spinner className="size-3" /> : <Sparkles className="size-3" />}
-          Run
+          {sourceSid ? "Chat" : "Run"}
         </Button>
       </div>
     </div>
@@ -159,7 +174,15 @@ const AiSelectionPopover = ({
 // syntax-highlighted source. Any text file can be edited in place (saved via
 // PUT /api/file/text). A terminal can be opened in the file's directory, and a
 // text selection can seed a Claude Code session.
-export const WikiDetail = ({ path, line }: { path: string; line: number | null }) => {
+export const WikiDetail = ({
+  path,
+  line,
+  sourceSid = null,
+}: {
+  path: string;
+  line: number | null;
+  sourceSid?: string | null;
+}) => {
   const [result, setResult] = useState<FilePreviewContent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
@@ -311,6 +334,15 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
         <span className="min-w-0 flex-1 truncate font-mono text-xs" title={activePath}>
           {basename}
         </span>
+        {sourceSid && (
+          <span
+            className="flex shrink-0 items-center gap-1 rounded bg-accent/40 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-accent-foreground"
+            title={`Linked to session ${sourceSid}`}
+          >
+            <Link2 className="size-3" />
+            session
+          </span>
+        )}
         {result && result.kind !== "directory" && (
           <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/60">
             {formatSize(result.size)}
@@ -467,6 +499,8 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
         <AiSelectionPopover
           path={activePath}
           selection={ai.selection}
+          line={line}
+          sourceSid={sourceSid}
           anchor={ai.anchor}
           onClose={() => setAi(null)}
         />

@@ -1740,46 +1740,88 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
   // written to a temp markdown file and passed via command substitution
   // (`claude "$(cat <tmp>)"`) so arbitrary quotes/newlines in the selection can
   // never break out of the argument — no shell-escaping of user text on our part.
-  api.post("/wiki/ai-session", async (context) => {
+  // "Chat about this" from a wiki file. Routes the user's prompt + the selected
+  // text back to the session the file was opened FROM (typed into its live PTY
+  // via bracketed paste, so a running Claude Code sees it as one message). If that
+  // session is gone (or none was linked), a fresh Claude Code session spawns at
+  // the base dir (default: the vault root, configurable) with the file
+  // @-referenced so the agent has the full document as context.
+  api.post("/wiki/chat", async (context) => {
     const body = (await readJsonBody(context)) as
-      | { path?: unknown; selection?: unknown; prompt?: unknown }
+      | {
+          path?: unknown;
+          selection?: unknown;
+          prompt?: unknown;
+          line?: unknown;
+          sessionId?: unknown;
+          baseDir?: unknown;
+        }
       | undefined;
     const rawPath = typeof body?.path === "string" ? body.path : "";
     const selection = typeof body?.selection === "string" ? body.selection : "";
     const prompt = typeof body?.prompt === "string" ? body.prompt.trim() : "";
+    const line = typeof body?.line === "number" && body.line > 0 ? body.line : null;
+    const sessionId = typeof body?.sessionId === "string" ? body.sessionId : null;
+    const baseDirRaw = typeof body?.baseDir === "string" ? body.baseDir : "";
     if (!prompt) return context.json({ error: "invalid_prompt" }, HTTP_STATUS_BAD_REQUEST);
-    // Resolve the file's directory as the session cwd (absolute path expected).
-    const filePath = resolveFileTextPath(os.homedir(), rawPath);
-    let cwd = os.homedir();
-    if (filePath) {
-      const dir = path.dirname(filePath);
-      try {
-        if (fs.statSync(dir).isDirectory()) cwd = dir;
-      } catch {
-        /* dir gone -> home */
+
+    const ref = line ? `${rawPath}:${line}` : rawPath;
+    let message = prompt;
+    if (selection.trim().length > 0) {
+      message += `\n\nReferring to \`${ref}\`:\n\n\`\`\`\n${selection}\n\`\`\``;
+    } else {
+      message += `\n\nReferring to ${ref}`;
+    }
+
+    // 1) Deliver to the linked session's live PTY (a running Claude Code). Bracketed
+    //    paste keeps the multi-line message as one input; the trailing CR submits it.
+    if (sessionId) {
+      const payload = `\x1b[200~${message}\x1b[201~\r`;
+      if (registry.writeInputById(sessionId, payload, ownerFor(context))) {
+        return context.json({ delivered: "session", id: sessionId });
       }
     }
-    if (registry.atCapacity()) {
-      return context.json({ error: "capacity" }, HTTP_STATUS_CONFLICT);
+
+    // 2) No live session — spawn a fresh Claude Code at the base dir (vault root
+    //    by default) and @-reference the file so it has the whole document.
+    if (registry.atCapacity()) return context.json({ error: "capacity" }, HTTP_STATUS_CONFLICT);
+    let cwd = os.homedir();
+    const configuredRoot = process.env.LOCALTERM_DEFAULT_CWD;
+    if (configuredRoot) {
+      try {
+        if (fs.statSync(configuredRoot).isDirectory()) cwd = configuredRoot;
+      } catch {
+        /* configured root gone -> home */
+      }
     }
-    const contextDoc =
-      selection.trim().length > 0
-        ? `${prompt}\n\n---\nSelected from ${rawPath || "a file"}:\n\n${selection}\n`
-        : `${prompt}\n`;
-    const tmpFile = path.join(os.tmpdir(), `termdeck-ai-${randomUUID()}.md`);
+    if (baseDirRaw) {
+      try {
+        if (fs.statSync(baseDirRaw).isDirectory()) cwd = baseDirRaw;
+      } catch {
+        /* bad base dir -> keep root/home */
+      }
+    }
+    // Prefer a path relative to the cwd for the @-mention (Claude resolves those
+    // reliably); fall back to the absolute path.
+    const filePath = resolveFileTextPath(os.homedir(), rawPath);
+    let mention = rawPath;
+    if (filePath) {
+      const rel = path.relative(cwd, filePath);
+      mention = rel && !rel.startsWith("..") ? rel : filePath;
+    }
+    const doc = `${message}\n\nFull file for context: @${mention}\n`;
+    const tmpFile = path.join(os.tmpdir(), `termdeck-chat-${randomUUID()}.md`);
     try {
-      fs.writeFileSync(tmpFile, contextDoc, "utf8");
+      fs.writeFileSync(tmpFile, doc, "utf8");
     } catch {
       return context.json({ error: "tmp_write_failed" }, HTTP_STATUS_NOT_FOUND);
     }
-    // `claude "$(cat tmp)"` seeds the interactive session with the prompt; then
-    // clean the temp file. Newlines/quotes in the selection are safe inside the
-    // double-quoted substitution. `rm -f` runs after claude exits.
     const initialCommand = `claude "$(cat ${tmpFile})"; rm -f ${tmpFile}`;
     const id = registry.spawnDetached({ cwd, initialCommand }, true, ownerFor(context));
     if (!id) return context.json({ error: "capacity" }, HTTP_STATUS_CONFLICT);
-    registry.setTitleById(id, "AI · from wiki", ownerFor(context));
-    return context.json({ id }, HTTP_STATUS_CREATED);
+    const basename = rawPath.slice(rawPath.lastIndexOf("/") + 1) || "file";
+    registry.setTitleById(id, `AI · ${basename}`, ownerFor(context));
+    return context.json({ delivered: "new", id }, HTTP_STATUS_CREATED);
   });
 
   // Locate a file under the wiki root by its trailing path segments. A clicked

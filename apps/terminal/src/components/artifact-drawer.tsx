@@ -11,6 +11,7 @@ export type ArtifactMode = "layover" | "push";
 export const ArtifactDrawer = ({
   path,
   line,
+  sourceSid,
   expanded,
   mode,
   onToggleMode,
@@ -20,6 +21,7 @@ export const ArtifactDrawer = ({
 }: {
   path: string;
   line: number | null;
+  sourceSid: string | null;
   expanded: boolean;
   mode: ArtifactMode;
   onToggleMode: () => void;
@@ -70,7 +72,7 @@ export const ArtifactDrawer = ({
       </Button>
     </div>
     <div className="min-h-0 flex-1">
-      <WikiDetail key={path} path={path} line={line} />
+      <WikiDetail key={path} path={path} line={line} sourceSid={sourceSid} />
     </div>
   </div>
 );

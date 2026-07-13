@@ -44,7 +44,7 @@ const readStoredArtifactWidth = (): number => {
 // clicked terminal file-path opens the artifact drawer on the right WITHOUT
 // leaving the current view — the terminal stays mounted underneath.
 export const Shell = () => {
-  const { mode, sid, wikiPath, wikiLine, artifactPath, artifactLine } = useShell();
+  const { mode, sid, wikiPath, wikiLine, artifactPath, artifactLine, artifactSid } = useShell();
   const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth);
   const [artifactWidth, setArtifactWidth] = useState(readStoredArtifactWidth);
   const [artifactExpanded, setArtifactExpanded] = useState(false);
@@ -113,9 +113,14 @@ export const Shell = () => {
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
-      const data = event.data as { type?: string; path?: string; line?: number | null } | null;
+      const data = event.data as {
+        type?: string;
+        path?: string;
+        line?: number | null;
+        sid?: string | null;
+      } | null;
       if (data?.type === WIKI_OPEN_MESSAGE && typeof data.path === "string") {
-        openArtifact(data.path, data.line ?? undefined);
+        openArtifact(data.path, data.line ?? undefined, data.sid ?? undefined);
       }
     };
     window.addEventListener("message", onMessage);
@@ -180,6 +185,7 @@ export const Shell = () => {
           <ArtifactDrawer
             path={artifactPath}
             line={artifactLine}
+            sourceSid={artifactSid}
             expanded={artifactExpanded}
             mode={artifactMode}
             onToggleMode={toggleArtifactMode}

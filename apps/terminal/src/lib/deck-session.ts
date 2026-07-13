@@ -52,22 +52,26 @@ export const createSession = async (cwd?: string): Promise<string> => {
   return id;
 };
 
-// Spawn a Claude Code session seeded with a prompt + a text selection from a
-// wiki file (highlight-to-AI). The server composes the command safely.
-export const createAiSessionFromWiki = async (input: {
+// "Chat about this" from a wiki file: route a prompt + selection back to the
+// linked session (typed into its live PTY), or spawn a fresh Claude Code session
+// at the base dir with the file @-referenced. Returns where it landed + the id.
+export const chatAboutSelection = async (input: {
+  sessionId?: string | null;
   path: string;
   selection: string;
   prompt: string;
-}): Promise<string> => {
-  const response = await fetch("/api/wiki/ai-session", {
+  line?: number | null;
+  baseDir?: string | null;
+}): Promise<{ delivered: "session" | "new"; id: string }> => {
+  const response = await fetch("/api/wiki/chat", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  if (!response.ok) throw new Error(`ai-session: ${response.status}`);
-  const body = (await response.json()) as { id?: string };
-  if (!body.id) throw new Error("ai-session: no session id");
-  return body.id;
+  if (!response.ok) throw new Error(`chat: ${response.status}`);
+  const body = (await response.json()) as { delivered?: "session" | "new"; id?: string };
+  if (!body.id || !body.delivered) throw new Error("chat: bad response");
+  return { delivered: body.delivered, id: body.id };
 };
 
 // Kill (close) a session by id — the grid's tile close/right-click action.

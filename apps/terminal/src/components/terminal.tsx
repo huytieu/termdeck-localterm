@@ -965,7 +965,9 @@ export const Terminal = () => {
             : cwd
               ? `${cwd.replace(/\/$/, "")}/${raw}`
               : raw;
-        openFileInWiki(absolute, match.line ?? undefined);
+        // Link the opened file to THIS session so "chat about this" can route a
+        // selection back to it.
+        openFileInWiki(absolute, match.line ?? undefined, liveSessionIdRef.current);
       }),
     );
 
