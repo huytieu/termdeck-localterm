@@ -1,15 +1,19 @@
-import { BookText, Maximize2, Minimize2, X } from "lucide-react";
+import { BookText, Columns2, Maximize2, Minimize2, PanelRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { WikiDetail } from "@/components/wiki-detail";
 
+export type ArtifactMode = "layover" | "push";
+
 // The artifact drawer: a file opened to the SIDE (from a clicked terminal path)
 // so the terminal the user is working in stays put — no navigation. A slim chrome
-// strip carries full-screen + open-in-Wiki + close; the body is the same
-// WikiDetail renderer the Wiki tab uses (markdown/HTML/source/edit/…).
+// strip carries mode (push/layover) + full-screen + open-in-Wiki + close; the body
+// is the same WikiDetail renderer the Wiki tab uses (markdown/HTML/source/edit/…).
 export const ArtifactDrawer = ({
   path,
   line,
   expanded,
+  mode,
+  onToggleMode,
   onToggleExpand,
   onOpenInWiki,
   onClose,
@@ -17,6 +21,8 @@ export const ArtifactDrawer = ({
   path: string;
   line: number | null;
   expanded: boolean;
+  mode: ArtifactMode;
+  onToggleMode: () => void;
   onToggleExpand: () => void;
   onOpenInWiki: () => void;
   onClose: () => void;
@@ -26,6 +32,15 @@ export const ArtifactDrawer = ({
       <span className="flex-1 truncate font-mono text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
         Artifact
       </span>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={mode === "push" ? "switch to layover" : "switch to push layout"}
+        title={mode === "push" ? "Overlay (layover)" : "Push layout (split)"}
+        onClick={onToggleMode}
+      >
+        {mode === "push" ? <PanelRight className="size-3.5" /> : <Columns2 className="size-3.5" />}
+      </Button>
       <Button
         variant="ghost"
         size="icon-sm"

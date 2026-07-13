@@ -10,7 +10,7 @@ import { ActivityBar } from "@/components/activity-bar";
 import { TermSidebar } from "@/components/term-sidebar";
 import { WikiSidebar } from "@/components/wiki-sidebar";
 import { WikiDetail } from "@/components/wiki-detail";
-import { ArtifactDrawer } from "@/components/artifact-drawer";
+import { ArtifactDrawer, type ArtifactMode } from "@/components/artifact-drawer";
 import { Grid } from "@/components/grid";
 import { Terminal } from "@/components/terminal";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -24,6 +24,10 @@ const SIDEBAR_STORAGE_KEY = "termdeck:sidebarWidth";
 const ARTIFACT_MIN = 360;
 const ARTIFACT_DEFAULT = 720;
 const ARTIFACT_STORAGE_KEY = "termdeck:artifactWidth";
+const ARTIFACT_MODE_KEY = "termdeck:artifactMode";
+
+const readStoredArtifactMode = (): ArtifactMode =>
+  window.localStorage.getItem(ARTIFACT_MODE_KEY) === "push" ? "push" : "layover";
 
 const readStoredWidth = (): number => {
   const saved = Number(window.localStorage.getItem(SIDEBAR_STORAGE_KEY));
@@ -44,6 +48,7 @@ export const Shell = () => {
   const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth);
   const [artifactWidth, setArtifactWidth] = useState(readStoredArtifactWidth);
   const [artifactExpanded, setArtifactExpanded] = useState(false);
+  const [artifactMode, setArtifactMode] = useState<ArtifactMode>(readStoredArtifactMode);
   // "sidebar" or "artifact" while a divider is being dragged, else null.
   const draggingRef = useRef<null | "sidebar" | "artifact">(null);
 
@@ -96,6 +101,13 @@ export const Shell = () => {
     document.body.style.cursor = "col-resize";
   };
 
+  const toggleArtifactMode = () =>
+    setArtifactMode((m) => {
+      const next: ArtifactMode = m === "push" ? "layover" : "push";
+      window.localStorage.setItem(ARTIFACT_MODE_KEY, next);
+      return next;
+    });
+
   // A file clicked inside an embedded terminal tile (iframe) posts here; open it
   // in the artifact drawer (never navigate). Same-origin only.
   useEffect(() => {
@@ -137,59 +149,86 @@ export const Shell = () => {
           />
         </>
       ) : null}
-      <main className="relative flex min-w-0 flex-1 flex-col">
-        {mode === "settings" ? (
-          <SettingsPanel />
-        ) : mode === "term" ? (
-          sid ? (
-            <Terminal key={sid} />
+      {(() => {
+        const detail =
+          mode === "settings" ? (
+            <SettingsPanel />
+          ) : mode === "term" ? (
+            sid ? (
+              <Terminal key={sid} />
+            ) : (
+              <Grid />
+            )
+          ) : wikiPath ? (
+            <WikiDetail key={wikiPath} path={wikiPath} line={wikiLine} />
           ) : (
-            <Grid />
-          )
-        ) : wikiPath ? (
-          <WikiDetail key={wikiPath} path={wikiPath} line={wikiLine} />
-        ) : (
-          <div className="flex h-full items-center justify-center font-mono text-sm text-muted-foreground">
-            Select a file from the tree.
-          </div>
-        )}
-
-        {/* Artifact drawer overlays the right side so the terminal underneath
-            keeps its size (no navigation, no reflow-to-zero). Full-screen mode
-            covers the whole detail area; the terminal stays mounted behind it. */}
-        {artifactPath ? (
-          <div
-            className="absolute inset-y-0 right-0 z-20 flex"
-            style={{ width: artifactExpanded ? "100%" : `${artifactWidth}px`, maxWidth: "100%" }}
-          >
-            {!artifactExpanded && (
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize artifact"
-                onMouseDown={startDrag("artifact")}
-                className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-ring/50"
-              />
-            )}
-            <div className="min-w-0 flex-1">
-              <ArtifactDrawer
-                path={artifactPath}
-                line={artifactLine}
-                expanded={artifactExpanded}
-                onToggleExpand={() => setArtifactExpanded((v) => !v)}
-                onOpenInWiki={() => {
-                  openWikiFile(artifactPath, artifactLine ?? undefined);
-                  closeArtifact();
-                }}
-                onClose={() => {
-                  setArtifactExpanded(false);
-                  closeArtifact();
-                }}
-              />
+            <div className="flex h-full items-center justify-center font-mono text-sm text-muted-foreground">
+              Select a file from the tree.
             </div>
-          </div>
-        ) : null}
-      </main>
+          );
+
+        const resizeHandle = (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize artifact"
+            onMouseDown={startDrag("artifact")}
+            className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-ring/50"
+          />
+        );
+        const drawer = artifactPath ? (
+          <ArtifactDrawer
+            path={artifactPath}
+            line={artifactLine}
+            expanded={artifactExpanded}
+            mode={artifactMode}
+            onToggleMode={toggleArtifactMode}
+            onToggleExpand={() => setArtifactExpanded((v) => !v)}
+            onOpenInWiki={() => {
+              openWikiFile(artifactPath, artifactLine ?? undefined);
+              closeArtifact();
+            }}
+            onClose={() => {
+              setArtifactExpanded(false);
+              closeArtifact();
+            }}
+          />
+        ) : null;
+
+        // Full-screen always overlays; otherwise "layover" overlays the right of
+        // the detail (terminal keeps its size) while "push" splits as a flex
+        // sibling (terminal shrinks + reflows).
+        const overlay = artifactPath && (artifactExpanded || artifactMode === "layover");
+        const pushed = artifactPath && !overlay;
+
+        return (
+          <main className="flex min-w-0 flex-1">
+            <div className="relative flex min-w-0 flex-1 flex-col">
+              {detail}
+              {overlay ? (
+                <div
+                  className="absolute inset-y-0 right-0 z-20 flex"
+                  style={{
+                    width: artifactExpanded ? "100%" : `${artifactWidth}px`,
+                    maxWidth: "100%",
+                  }}
+                >
+                  {!artifactExpanded && resizeHandle}
+                  <div className="min-w-0 flex-1">{drawer}</div>
+                </div>
+              ) : null}
+            </div>
+            {pushed ? (
+              <>
+                {resizeHandle}
+                <aside className="shrink-0" style={{ width: `${artifactWidth}px` }}>
+                  {drawer}
+                </aside>
+              </>
+            ) : null}
+          </main>
+        );
+      })()}
     </div>
   );
 };

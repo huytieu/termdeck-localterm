@@ -6,6 +6,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Markdown } from "@/components/markdown";
 import { openSession, openWikiFile } from "@/hooks/use-shell";
 import { createSession, createAiSessionFromWiki } from "@/lib/deck-session";
+import { CsvView } from "@/components/csv-view";
 import {
   ERROR_MESSAGES,
   SourceView,
@@ -16,6 +17,7 @@ import {
 } from "@/components/file-preview";
 
 const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p);
+const isCsvPath = (p: string): boolean => /\.(csv|tsv)$/i.test(p);
 
 const dirOf = (p: string): string =>
   p.startsWith("/") ? p.slice(0, p.lastIndexOf("/")) || "/" : "/";
@@ -166,6 +168,13 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  // The path actually on disk, once resolved. A clicked path can be relative to
+  // a base the terminal can't know (e.g. `../customer-insights/foo.html` printed
+  // inside another file), so anchoring it to the session cwd gives a bogus
+  // `/vault/../…`. When that happens we locate the file by its tail under the
+  // vault and render THAT. `activePath` is what every file op below uses.
+  const [resolvedPath, setResolvedPath] = useState<string | null>(null);
+  const activePath = resolvedPath ?? path;
   const [ai, setAi] = useState<{ selection: string; anchor: { top: number; left: number } } | null>(
     null,
   );
@@ -177,29 +186,57 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
     setShowSource(line !== null); // a search hit lands on the source at its line
     setEditing(false);
     setAi(null);
-    const cwd = dirOf(path);
-    const url = new URL("/api/file/text", window.location.href);
-    url.searchParams.set("cwd", cwd);
-    url.searchParams.set("path", path);
-    void fetch(url, { signal: controller.signal })
-      .then(async (response) => {
-        const body = (await response.json()) as FileTextResponse;
-        if (controller.signal.aborted) return;
+    setResolvedPath(null);
+
+    const fetchText = async (target: string): Promise<FileTextResponse | null> => {
+      const url = new URL("/api/file/text", window.location.href);
+      url.searchParams.set("cwd", dirOf(target));
+      url.searchParams.set("path", target);
+      const response = await fetch(url, { signal: controller.signal });
+      return (await response.json()) as FileTextResponse;
+    };
+
+    const load = async () => {
+      // A `..`/`...` segment (or a non-absolute path) means the anchor is wrong;
+      // locate the real file by its tail before rendering.
+      const needsLocate = /(^|\/)(\.\.|\.\.\.)(\/|$)/.test(path) || !path.startsWith("/");
+      let target = path;
+      if (needsLocate) {
+        const relMatch = path.match(/.*\/(?:\.\.|\.\.\.)\/(.+)$/);
+        const rel = relMatch ? relMatch[1] : path;
+        try {
+          const res = await fetch(`/api/wiki/locate?rel=${encodeURIComponent(rel)}`, {
+            signal: controller.signal,
+          });
+          const body = (await res.json()) as { path: string | null };
+          if (body.path) {
+            target = body.path;
+            if (!controller.signal.aborted) setResolvedPath(body.path);
+          }
+        } catch {
+          /* locate failed; fall through and try the raw path */
+        }
+      }
+      try {
+        const body = await fetchText(target);
+        if (!body || controller.signal.aborted) return;
         if ("error" in body) setError(ERROR_MESSAGES[body.error] ?? "Preview failed.");
         else setResult(body);
-      })
-      .catch(() => {
+      } catch {
         if (!controller.signal.aborted) setError("Preview failed: the daemon didn't respond.");
-      });
+      }
+    };
+    void load();
     return () => controller.abort();
   }, [path, line, reloadTick]);
 
-  const basename = path.slice(path.lastIndexOf("/") + 1);
+  const basename = activePath.slice(activePath.lastIndexOf("/") + 1);
   const isText = result?.kind === "text";
   const markdown = isText && isMarkdownPath(result.path);
   const html = isText && isHtmlPath(result.path);
-  // Markdown/HTML render by default; other text files are source-only.
-  const renderable = markdown || html;
+  const csv = isText && isCsvPath(result.path);
+  // Markdown/HTML/CSV render by default; other text files are source-only.
+  const renderable = markdown || html || csv;
 
   const startEdit = () => {
     if (!isText) return;
@@ -213,8 +250,8 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
     setSaving(true);
     setSaveError(null);
     const url = new URL("/api/file/text", window.location.href);
-    url.searchParams.set("cwd", dirOf(path));
-    url.searchParams.set("path", path);
+    url.searchParams.set("cwd", dirOf(activePath));
+    url.searchParams.set("path", activePath);
     try {
       const response = await fetch(url, {
         method: "PUT",
@@ -237,7 +274,7 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
   };
 
   const openTerminalHere = () => {
-    void createSession(dirOf(path)).then(openSession);
+    void createSession(dirOf(activePath)).then(openSession);
   };
 
   // Capture a text selection inside the rendered/source view to anchor the AI popover.
@@ -271,7 +308,7 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
         ) : (
           <File className="size-4 shrink-0 text-muted-foreground/60" />
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={path}>
+        <span className="min-w-0 flex-1 truncate font-mono text-xs" title={activePath}>
           {basename}
         </span>
         {result && result.kind !== "directory" && (
@@ -378,6 +415,8 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
                 </div>
               );
             })()
+          ) : csv && !showSource ? (
+            <CsvView path={result.path} content={result.content} />
           ) : (
             <div className="py-3">
               <SourceView path={result.path} content={result.content} focusLine={line} />
@@ -426,7 +465,7 @@ export const WikiDetail = ({ path, line }: { path: string; line: number | null }
 
       {ai ? (
         <AiSelectionPopover
-          path={path}
+          path={activePath}
           selection={ai.selection}
           anchor={ai.anchor}
           onClose={() => setAi(null)}

@@ -66,7 +66,15 @@ export const analyzeToken = (token: string): TokenAnalysis | null => {
   if (core.includes("/")) {
     if (!isAnchored) {
       const lastSegment = core.slice(core.lastIndexOf("/") + 1);
-      if (!LAST_SEGMENT_HAS_EXTENSION.test(lastSegment)) return null;
+      const hasExtension = LAST_SEGMENT_HAS_EXTENSION.test(lastSegment);
+      const endsWithSlash = core.endsWith("/");
+      const slashCount = (core.match(/\//g) ?? []).length;
+      // Trust a bare (non-anchored) path when it names a file (extension), or is
+      // clearly a nested vault path/dir: a trailing slash, or 2+ separators deep
+      // (`04-projects/true-platform/customer-insights/`). Keeps "and/or" (one
+      // slash, no extension) from linkifying; a deep numeric date still linkifies
+      // but the viewer just reports not-found, a harmless no-op.
+      if (!hasExtension && !endsWithSlash && slashCount < 2) return null;
     }
   } else {
     // No slash at all: only trust it with both an extension and a :line

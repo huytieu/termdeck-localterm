@@ -1782,6 +1782,91 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     return context.json({ id }, HTTP_STATUS_CREATED);
   });
 
+  // Locate a file under the wiki root by its trailing path segments. A clicked
+  // terminal path is often RELATIVE to a base the terminal can't know — e.g.
+  // `../customer-insights/foo.html` printed inside another file — so anchoring it
+  // to the session cwd yields a bogus `/vault/../…` that doesn't exist. Instead
+  // we strip the `.`/`..`/`...` prefix segments and find the file whose path ends
+  // with the remaining tail (preferring an exact tail match, then the shortest
+  // path). Used by the wiki drawer as a self-healing fallback on not-found.
+  api.get("/wiki/locate", async (context) => {
+    const rel = (context.req.query("rel") ?? "").trim();
+    const segs = rel.split("/").filter((s) => s && s !== "." && s !== ".." && s !== "...");
+    if (segs.length === 0) return context.json({ path: null });
+    const basename = segs[segs.length - 1];
+    const tail = segs.join("/");
+    const configured = process.env.LOCALTERM_DEFAULT_CWD;
+    let root = os.homedir();
+    if (configured) {
+      try {
+        if (fs.statSync(configured).isDirectory()) root = configured;
+      } catch {
+        /* configured dir missing -> home */
+      }
+    }
+    const out = await new Promise<string>((resolve) => {
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(
+          "find",
+          [
+            root,
+            "-type",
+            "f",
+            "-name",
+            basename,
+            "-not",
+            "-path",
+            "*/node_modules/*",
+            "-not",
+            "-path",
+            "*/.git/*",
+          ],
+          { cwd: root },
+        );
+      } catch {
+        resolve("");
+        return;
+      }
+      let buf = "";
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(buf);
+      };
+      // Generous: find block-buffers its pipe stdout and only flushes on exit,
+      // so a premature kill loses the matches entirely. The vault lives in iCloud
+      // (cold metadata is slow to stat), so give it room to finish normally.
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          /* gone */
+        }
+        done();
+      }, 20000);
+      child.stdout?.on("data", (c: Buffer) => {
+        buf += c.toString("utf8");
+        if (buf.length > 256 * 1024) {
+          child.kill();
+          done();
+        }
+      });
+      child.on("error", () => done());
+      child.on("close", () => done());
+    });
+    const candidates = out.split("\n").filter(Boolean);
+    if (candidates.length === 0) return context.json({ path: null });
+    candidates.sort((a, b) => {
+      const at = a.endsWith(`/${tail}`) ? 0 : 1;
+      const bt = b.endsWith(`/${tail}`) ? 0 : 1;
+      return at - bt || a.length - b.length;
+    });
+    return context.json({ path: candidates[0] });
+  });
+
   // Resolve a worktree path (create target / remove target). Relative paths are
   // anchored to the caller's cwd so the client can pass a project-relative name;
   // absolute paths pass through. No traversal/containment check — the daemon
