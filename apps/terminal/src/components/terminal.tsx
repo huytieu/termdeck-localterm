@@ -371,6 +371,10 @@ const buildWebSocketUrl = (cwdOverride?: string | null, sid?: string | null): st
   // profile carries the same id.
   const windowId = loadWindowId();
   if (windowId) url.searchParams.set(WINDOW_ID_QUERY_PARAM, windowId);
+  // Grid tiles load the app at /?embed=1&follow=1 — forward follow to the daemon
+  // so this client attaches in follow mode and never clamps a wider full viewer
+  // of the same session (the pty-mask squeeze bug).
+  if (params.get("follow") === "1") url.searchParams.set("follow", "1");
   // Forward a transient initial command (a worktree's setup script) so the
   // server writes it to the PTY as if the user typed it — the install/env-copy
   // output is visible and the prompt returns when it finishes.

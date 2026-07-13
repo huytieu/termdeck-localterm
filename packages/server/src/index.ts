@@ -68,6 +68,7 @@ import {
   SESSION_ID_QUERY_PARAM,
   SESSION_ACTIVITY_WINDOW_MS,
   WINDOW_ID_QUERY_PARAM,
+  FOLLOW_QUERY_PARAM,
   WAIT_DEFAULT_TIMEOUT_MS,
   WS_BACKPRESSURE_THRESHOLD_BYTES,
   WS_CLOSE_BACKPRESSURE,
@@ -2940,6 +2941,9 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
       const requestedRunId = context.req.query(AUTOMATION_RUN_QUERY_PARAM);
       const requestedSid = context.req.query(SESSION_ID_QUERY_PARAM) ?? null;
       const requestedWindowId = resolveWindowId(context.req.query(WINDOW_ID_QUERY_PARAM));
+      // Grid tiles attach in follow mode (`?follow=1`) so their narrow width
+      // never clamps a wider full viewer of the same session. See recomputeResize.
+      const requestedFollow = context.req.query(FOLLOW_QUERY_PARAM) === "1";
       // A plain tab may carry an initial command (a worktree's setup script) —
       // distinct from an automation run (`?run=`), which still takes precedence
       // when both are present. The command is written to the PTY as if the user
@@ -2968,7 +2972,7 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
           // (shell exited while dormant, killed, or reaped by the idle
           // sweep) falls through to a fresh spawn.
           const attached = requestedSid
-            ? registry.attach(ws, requestedSid, owner, requestedWindowId)
+            ? registry.attach(ws, requestedSid, owner, requestedWindowId, requestedFollow)
             : null;
           if (attached) {
             managed = attached;
@@ -3006,6 +3010,7 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
               automation,
               owner,
               requestedWindowId,
+              requestedFollow,
             );
             if (!spawned) {
               ws.close(WS_CLOSE_CAPACITY_REACHED, "session capacity reached");

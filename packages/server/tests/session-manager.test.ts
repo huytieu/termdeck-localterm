@@ -488,6 +488,63 @@ describe("SessionManager pty-size", { tags: ["integration"] }, () => {
     );
     expect(seeded.length).toBeGreaterThan(0);
   });
+
+  it("a follow (grid tile) client never clamps a wider full viewer", () => {
+    const sent: { ws: ClientSocket; payload: ServerToClientMessage }[] = [];
+    manager = new SessionManager({
+      sendControl: (ws, payload) => sent.push({ ws, payload }),
+      hooks: noopHooks,
+    });
+    const desktop = createFakeSocket();
+    const spawned = manager.spawnAndAttach(desktop, shellInput);
+    expect(spawned).not.toBeNull();
+    if (!spawned) return;
+    manager.promote(desktop, false);
+    manager.resize(desktop, 120, 40);
+    sent.length = 0;
+
+    // A grid tile attaches in follow mode at a narrow width. It must NOT clamp
+    // the desktop — the whole point of the pty-mask squeeze fix. The desktop
+    // stays the size authority, so no constrained pty-size frame is emitted.
+    const tile = createFakeSocket();
+    manager.attach(tile, spawned.id, null, "", true);
+    manager.promote(tile, false);
+    manager.resize(tile, 40, 24);
+    expect(
+      sent.filter(
+        (entry) => entry.payload.type === "pty-size" && entry.ws === desktop,
+      ),
+    ).toEqual([]);
+    // The PTY itself stays at the desktop's width — not squeezed to the tile.
+    expect(spawned.session.cols).toBe(120);
+    expect(spawned.session.rows).toBe(40);
+  });
+
+  it("follow clients set the size only when no authoritative viewer remains", () => {
+    const sent: { ws: ClientSocket; payload: ServerToClientMessage }[] = [];
+    manager = new SessionManager({
+      sendControl: (ws, payload) => sent.push({ ws, payload }),
+      hooks: noopHooks,
+    });
+    const desktop = createFakeSocket();
+    const spawned = manager.spawnAndAttach(desktop, shellInput);
+    expect(spawned).not.toBeNull();
+    if (!spawned) return;
+    manager.promote(desktop, false);
+    manager.resize(desktop, 120, 40);
+    const tile = createFakeSocket();
+    manager.attach(tile, spawned.id, null, "", true);
+    manager.promote(tile, false);
+    manager.resize(tile, 40, 24);
+    sent.length = 0;
+
+    // Desktop leaves: the grid tile is now the only viewer, so it becomes the
+    // size authority and the PTY narrows to the tile — the fallback keeps a
+    // grid-only session from freezing at the departed viewer's size.
+    manager.detach(desktop);
+    expect(spawned.session.cols).toBe(40);
+    expect(spawned.session.rows).toBe(24);
+  });
 });
 
 describe("SessionManager sessionsInPath", { tags: ["integration"] }, () => {

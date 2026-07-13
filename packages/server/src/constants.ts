@@ -387,6 +387,13 @@ export const SESSION_ID_QUERY_PARAM = "sid";
 // browser partitions per profile, so every tab/window of one profile shares it
 // and a different profile gets a different one.
 export const WINDOW_ID_QUERY_PARAM = "wid";
+// Query param a "follow"-mode client carries (the grid tiles). A follow client
+// renders the PTY at whatever effective size the authoritative viewers dictate
+// but never contributes to the min-across-clients size negotiation, so a narrow
+// grid tile can't clamp (squeeze) a wider full viewer of the same session. Only
+// when a session's ONLY viewers are follow clients do they set the size. See
+// SessionRegistry.recomputeResize.
+export const FOLLOW_QUERY_PARAM = "follow";
 // Query param an automation-run tab carries so the server can claim the run
 // (single-use) and pair the WS with the CDP target that opened it.
 export const AUTOMATION_RUN_QUERY_PARAM = "run";

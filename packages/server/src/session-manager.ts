@@ -174,6 +174,12 @@ interface ManagedClient {
   // profile for the picker's peer display. `""` for a back-compat client that
   // didn't send one.
   windowId: string;
+  // "Follow" mode (the grid tiles, `?follow=1`). A follow client renders the
+  // PTY at the effective size the authoritative viewers dictate but is excluded
+  // from the min-across-clients size negotiation, so a narrow tile never clamps
+  // (squeezes) a wider full viewer of the same session. It only sets the size
+  // when a session has no authoritative viewers left. See recomputeResize.
+  follow: boolean;
   coordinator: GitMetadataCoordinator | null;
   compressMode: CompressMode;
   brotliEncoder: BrotliEncoder | null;
@@ -490,10 +496,11 @@ export class SessionManager {
     automation?: AutomationContext,
     owner: SessionOwner = null,
     windowId: string = "",
+    follow: boolean = false,
   ): ManagedSession | null {
     const spawned = this.spawn(input, automation, owner);
     if (!spawned) return null;
-    return this.attach(ws, spawned.id, owner, windowId);
+    return this.attach(ws, spawned.id, owner, windowId, follow);
   }
 
   // Resolve a live, owned session for an id-based (REST/CLI) operation. Returns
@@ -516,6 +523,7 @@ export class SessionManager {
     id: string,
     owner: SessionOwner = null,
     windowId: string = "",
+    follow: boolean = false,
   ): ManagedSession | null {
     const managed = this.sessionFor(id, owner);
     if (!managed) return null;
@@ -538,6 +546,7 @@ export class SessionManager {
       cols: 0,
       rows: 0,
       windowId,
+      follow,
       coordinator,
       compressMode: null,
       brotliEncoder: null,
@@ -546,13 +555,21 @@ export class SessionManager {
     managed.clients.add(client);
     this.wsToClient.set(ws, { client, session: managed });
     this.recomputeResize(managed);
-    // Seed a joiner with the current effective size when it's entering an
-    // already-multi-viewer session whose min its own (possibly wider) report
-    // doesn't change — recomputeResize only broadcasts on a change, so without
-    // this the new viewer would never learn it's constrained and would render
-    // no mask. A fresh spawn (now the lone viewer) has no stored size and is
-    // skipped, and a joiner that changes the min is reached by the broadcast.
-    if (managed.clients.size > 1 && managed.ptySizeCols !== null && managed.ptySizeRows !== null) {
+    // Seed a joiner with the current effective size when it's entering a session
+    // that already carries a genuine AUTHORITATIVE constraint (ptySizeWasMultiViewer)
+    // whose min its own (possibly wider) report doesn't change — recomputeResize
+    // only broadcasts on a change, so without this the new viewer would never learn
+    // it's constrained and would render no mask. Gating on ptySizeWasMultiViewer
+    // (not clients.size) is what keeps a follow grid tile from seeding a fresh full
+    // viewer with the tile's narrow width — a stale seed that would paint a mask
+    // dead-zone over the full viewer (the squeeze bug). A fresh spawn (now the lone
+    // viewer) has no constraint and is skipped, and a joiner that changes the min is
+    // reached by the broadcast.
+    if (
+      managed.ptySizeWasMultiViewer &&
+      managed.ptySizeCols !== null &&
+      managed.ptySizeRows !== null
+    ) {
       this.sendToClient(client, {
         type: "pty-size",
         cols: managed.ptySizeCols,
@@ -1348,15 +1365,47 @@ export class SessionManager {
   private recomputeResize(managed: ManagedSession): void {
     const session = managed.session;
     if (session.isExited) return;
+    // The PTY sizes to the min across its AUTHORITATIVE (non-follow) viewers —
+    // a narrower peer constrains everyone (tmux style). Follow clients (the grid
+    // tiles) are excluded so a half-width tile can't clamp a wider full viewer
+    // of the same session (the "terminal squeeze"/pty-mask dead-zone bug). They
+    // set the size only as a fallback, when a session has no authoritative
+    // viewer left (e.g. it's shown only in the grid) — otherwise a follow-only
+    // session would never get a size and the tile would render blank.
     let cols = Infinity;
     let rows = Infinity;
     let single: ManagedClient | null = null;
     let count = 0;
+    let followCols = Infinity;
+    let followRows = Infinity;
+    let followSingle: ManagedClient | null = null;
+    let followCount = 0;
     for (const client of managed.clients) {
+      if (client.follow) {
+        followCount++;
+        followSingle = client;
+        if (client.cols > 0 && client.cols < followCols) followCols = client.cols;
+        if (client.rows > 0 && client.rows < followRows) followRows = client.rows;
+        continue;
+      }
       count++;
       single = client;
       if (client.cols > 0 && client.cols < cols) cols = client.cols;
       if (client.rows > 0 && client.rows < rows) rows = client.rows;
+    }
+    // The authoritative-viewer count drives the mask protocol below — a genuine
+    // (mask-worthy) constraint exists only when 2+ authoritative viewers share
+    // one PTY. Follow clients never enter it, so `authCount` is captured before
+    // the fallback and left untouched by it.
+    const authCount = count;
+    if (count === 0) {
+      // No authoritative viewer: fall back to the follow clients (grid-only
+      // session) so the PTY still gets a sane size instead of freezing at its
+      // last value or Infinity.
+      cols = followCols;
+      rows = followRows;
+      single = followSingle;
+      count = followCount;
     }
     if (count === 0) return;
     if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
@@ -1368,18 +1417,21 @@ export class SessionManager {
     // Keep the capture renderer's grid at the PTY's effective size so a
     // capture-pane reflects the same line wrapping a viewer would see.
     managed.captureRenderer?.resize(cols, rows);
-    // The PTY's effective size is the min across attached clients (tmux-style):
-    // a narrower peer constrains everyone. Broadcast it on change so each
-    // viewer can mask the dead area beyond its own (possibly wider) grid as
-    // inactive chrome. A lone viewer is never constrained (its effective size
-    // always equals its own), so it's left quiet except for one clear frame when
-    // a peer detaches and drops it back to solo — that erases the mask the
-    // leaving peer had imposed. A joiner entering an already-constrained
-    // session without changing the min is seeded in attach.
+    // The PTY's effective size is the min across authoritative viewers (tmux
+    // style): a narrower authoritative peer constrains everyone. Broadcast it on
+    // change so each viewer can mask the dead area beyond its own (possibly
+    // wider) grid as inactive chrome. The mask protocol is keyed on AUTHORITATIVE
+    // count only — a lone authoritative viewer (even alongside follow grid tiles)
+    // is never constrained, so it stays quiet except for one clear frame when a
+    // constraining authoritative peer detaches and drops it back to solo, which
+    // erases the mask that peer had imposed. Follow clients never trigger a mask:
+    // they only ever run at-or-below the effective width, so they clip rather
+    // than mask. A joiner entering an already-constrained session without changing
+    // the min is seeded in attach.
     const sizeChanged = managed.ptySizeCols !== cols || managed.ptySizeRows !== rows;
     managed.ptySizeCols = cols;
     managed.ptySizeRows = rows;
-    if (count > 1) {
+    if (authCount > 1) {
       managed.ptySizeWasMultiViewer = true;
       if (sizeChanged) {
         this.broadcast(managed, { type: "pty-size", cols, rows });

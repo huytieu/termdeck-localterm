@@ -57,7 +57,7 @@ export const SessionTile = ({
       </div>
       <iframe
         title={session.title || session.id}
-        src={`/?embed=1&sid=${encodeURIComponent(session.id)}`}
+        src={`/?embed=1&follow=1&sid=${encodeURIComponent(session.id)}`}
         className="min-h-0 flex-1 border-0 bg-black"
         allow="clipboard-read; clipboard-write"
       />
