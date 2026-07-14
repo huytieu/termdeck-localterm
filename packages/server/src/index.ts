@@ -184,6 +184,7 @@ import { resolveStaticAsset } from "./static-resolver.js";
 import { resolveImageAsset } from "./utils/resolve-image-asset.js";
 import { imageContentTypeFor } from "./utils/image-extensions.js";
 import { videoContentTypeFor } from "./utils/video-extensions.js";
+import { revealInFileManager } from "./utils/reveal-in-file-manager.js";
 import { Readable } from "node:stream";
 import { sweepStaleWorktrees } from "./utils/worktree-sweep.js";
 import {
@@ -1655,6 +1656,24 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
       status: 200,
       headers: { ...headers, "content-length": String(size) },
     });
+  });
+
+  // Reveal a document's real file in the OS file manager (Finder on macOS). The
+  // browser can't open Finder, so the daemon does it. Query params (not a body)
+  // so it needs no request parsing; path resolved + stat-checked before reveal.
+  api.post("/reveal", (context) => {
+    const cwd = resolveCwdQuery(context.req.query("cwd"));
+    if (!cwd) return context.json({ error: "invalid_cwd" }, HTTP_STATUS_BAD_REQUEST);
+    const filePath = resolveFileTextPath(cwd, context.req.query("path"));
+    if (!filePath) return context.json({ error: "invalid_path" }, HTTP_STATUS_BAD_REQUEST);
+    try {
+      fs.statSync(filePath);
+    } catch {
+      return context.json({ error: "not_found" }, HTTP_STATUS_NOT_FOUND);
+    }
+    return revealInFileManager(filePath)
+      ? context.json({ ok: true, path: filePath })
+      : context.json({ error: "reveal_failed" }, 500);
   });
 
   const readJsonBody = async (context: { req: { json: () => Promise<unknown> } }) => {

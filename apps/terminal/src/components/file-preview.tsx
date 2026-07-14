@@ -1,4 +1,4 @@
-import { Copy, FileCode, FileText, Folder, SquarePen, X } from "lucide-react";
+import { Copy, FileCode, FileText, Folder, FolderOpen, SquarePen, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { currentTheme, subscribeTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/markdown";
 import { buildMediaUrl } from "@/utils/build-media-url";
+import { revealFileLocation } from "@/utils/reveal-file";
 import {
   detectLangId,
   tokenizeDiffLines,
@@ -293,6 +294,18 @@ export const FilePreviewModal = ({
           >
             {copied ? <span className="font-mono text-[11px]">copied</span> : <Copy className="size-3.5" />}
           </Button>
+          {result && result.kind !== "directory" && cwd && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2"
+              aria-label="reveal in file manager"
+              title="Reveal the real file in Finder"
+              onClick={() => void revealFileLocation(cwd, resolvedPath)}
+            >
+              <FolderOpen className="size-3.5" />
+            </Button>
+          )}
           {isEditableFile && (
             <Button
               variant="ghost"

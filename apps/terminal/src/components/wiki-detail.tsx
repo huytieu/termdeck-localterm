@@ -12,6 +12,7 @@ import {
   File,
   FileText,
   Folder,
+  FolderOpen,
   Globe,
   Link2,
   PanelRight,
@@ -49,6 +50,7 @@ import {
 } from "@/components/file-preview";
 import { isGithubArtifactPath, githubVirtualName } from "@/utils/github-link";
 import { buildMediaUrl } from "@/utils/build-media-url";
+import { revealFileLocation } from "@/utils/reveal-file";
 
 const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p);
 const isCsvPath = (p: string): boolean => /\.(csv|tsv)$/i.test(p);
@@ -626,6 +628,17 @@ export const WikiDetail = ({
           </>
         ) : (
           <>
+            {!isGithub && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="reveal in file manager"
+                title="Reveal the real file in Finder"
+                onClick={() => void revealFileLocation(dirOf(activePath), activePath)}
+              >
+                <FolderOpen className="size-3.5" />
+              </Button>
+            )}
             {!isGithub && (
               <Button
                 variant="ghost"
