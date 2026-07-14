@@ -416,9 +416,17 @@ export const WikiDetail = ({
     setAi(null);
     setResolvedPath(null);
 
-    const fetchText = async (target: string): Promise<FileTextResponse | null> => {
+    const fetchText = async (
+      target: string,
+      cwd?: string,
+    ): Promise<FileTextResponse | null> => {
       const url = new URL("/api/file/text", window.location.href);
-      url.searchParams.set("cwd", dirOf(target));
+      // cwd only anchors relative paths; for absolute / ~ paths it's ignored by
+      // the daemon EXCEPT that it's validated as an existing dir first. So when a
+      // caller can't guarantee the parent exists (a missing file's dirOf points
+      // at a missing dir → a misleading "cwd is gone" error), it passes "/" and
+      // lets the daemon resolve the path and return the real not_found.
+      url.searchParams.set("cwd", cwd ?? dirOf(target));
       url.searchParams.set("path", target);
       const response = await fetch(url, { signal: controller.signal });
       return (await response.json()) as FileTextResponse;
@@ -457,11 +465,10 @@ export const WikiDetail = ({
       // Fast path: fetch the path exactly as given. The daemon resolves `~` and
       // cwd-relative paths itself (statting a single file), so absolute vault
       // paths AND the `~/vault/…` paths that terminal clicks produce both render
-      // in a couple of ms. Only when this genuinely fails do we fall back to the
-      // vault-wide `locate` below — which shells out to `find` over the whole
-      // (iCloud-backed) tree and can take ~20s, so it must never be the default.
+      // in a couple of ms.
+      let directError: string | null = null;
       try {
-        const direct = await fetchText(path);
+        const direct = await fetchText(path, "/");
         if (controller.signal.aborted) return;
         if (direct && !("error" in direct)) {
           // The response carries the resolved absolute path; adopt it so the
@@ -470,18 +477,38 @@ export const WikiDetail = ({
           setResult(direct);
           return;
         }
+        directError = direct && "error" in direct ? direct.error : null;
       } catch {
         if (controller.signal.aborted) return;
-        /* transient failure — fall through to locate as a last resort */
+        /* transient failure — reported below unless a locate is warranted */
       }
-      // Fallback: a `..`/`...`-truncated or otherwise unanchored path. Locate the
-      // real file by its tail across the vault, then render whatever that finds.
+      // The vault-wide `locate` shells out to `find` over the whole (iCloud-
+      // backed) tree and can take ~20s, so reserve it for the ONE case it exists
+      // for: a path with an elided middle (`…/foo.md` or `../foo.md`) printed in
+      // terminal output, which can't be fetched directly. Any other miss — an
+      // absolute or ~ path that simply isn't there — fails fast right here
+      // instead of hanging on a search that can't succeed.
       const relMatch = path.match(/.*\/(?:\.\.|\.\.\.)\/(.+)$/);
-      const rel = relMatch ? relMatch[1] : path;
+      if (!relMatch) {
+        if (!controller.signal.aborted) {
+          setError(
+            directError
+              ? (ERROR_MESSAGES[directError] ?? "Preview failed.")
+              : "Preview failed: the daemon didn't respond.",
+          );
+        }
+        return;
+      }
+      // Bound the search: if `find` is still churning after a few seconds, stop
+      // waiting and report rather than spinning indefinitely.
       let target = path;
+      const locateAbort = new AbortController();
+      const onParentAbort = () => locateAbort.abort();
+      controller.signal.addEventListener("abort", onParentAbort);
+      const locateTimer = window.setTimeout(() => locateAbort.abort(), 6000);
       try {
-        const res = await fetch(`/api/wiki/locate?rel=${encodeURIComponent(rel)}`, {
-          signal: controller.signal,
+        const res = await fetch(`/api/wiki/locate?rel=${encodeURIComponent(relMatch[1])}`, {
+          signal: locateAbort.signal,
         });
         const body = (await res.json()) as { path: string | null };
         if (body.path) {
@@ -490,7 +517,10 @@ export const WikiDetail = ({
         }
       } catch {
         if (controller.signal.aborted) return;
-        /* locate failed; fall through and try the raw path */
+        /* locate timed out or failed; try the raw path, then report */
+      } finally {
+        window.clearTimeout(locateTimer);
+        controller.signal.removeEventListener("abort", onParentAbort);
       }
       try {
         const body = await fetchText(target);
