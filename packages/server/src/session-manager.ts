@@ -1377,6 +1377,7 @@ export class SessionManager {
     let single: ManagedClient | null = null;
     let count = 0;
     let followCols = Infinity;
+    let followColsMax = 0;
     let followRows = Infinity;
     let followSingle: ManagedClient | null = null;
     let followCount = 0;
@@ -1385,6 +1386,7 @@ export class SessionManager {
         followCount++;
         followSingle = client;
         if (client.cols > 0 && client.cols < followCols) followCols = client.cols;
+        if (client.cols > followColsMax) followColsMax = client.cols;
         if (client.rows > 0 && client.rows < followRows) followRows = client.rows;
         continue;
       }
@@ -1409,7 +1411,21 @@ export class SessionManager {
     }
     if (count === 0) return;
     if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
-    if (count === 1 && single?.pixelWidth !== undefined && single?.pixelHeight !== undefined) {
+    // Grow-to-fill (grow-only guard): a follow grid tile wider than the
+    // authoritative min GROWS the PTY to its width so it never sits with an
+    // empty masked strip on the right. This never SHRINKS below the
+    // authoritative min (we only raise `cols`), so a narrower full viewer is
+    // never squeezed — it just masks the grown columns via the same mask
+    // protocol as a multi-viewer constraint. Cols only: growing rows would make
+    // a shorter authoritative viewer scroll, whereas an over-wide grid tile is
+    // the actual complaint. Skipped when the grid is the sole viewer (authCount
+    // 0) — the fallback above already sized to it.
+    const grewViaFollow = authCount > 0 && followColsMax > cols;
+    if (grewViaFollow) cols = followColsMax;
+    // The single-viewer pixel path reports that viewer's exact cell metrics;
+    // once we've grown past it the cols no longer match, so fall back to the
+    // char-only resize.
+    if (count === 1 && !grewViaFollow && single?.pixelWidth !== undefined && single?.pixelHeight !== undefined) {
       session.resize(cols, rows, single.pixelWidth, single.pixelHeight);
     } else {
       session.resize(cols, rows);
@@ -1431,7 +1447,13 @@ export class SessionManager {
     const sizeChanged = managed.ptySizeCols !== cols || managed.ptySizeRows !== rows;
     managed.ptySizeCols = cols;
     managed.ptySizeRows = rows;
-    if (authCount > 1) {
+    // A mask is needed whenever some viewer is narrower than the effective width:
+    // either 2+ authoritative viewers share the PTY (tmux min), OR a follow grid
+    // tile grew it past a narrower authoritative viewer. Both cases broadcast the
+    // effective size so the narrower viewer masks its dead columns; when neither
+    // holds anymore we send one clear frame to erase any mask still standing.
+    const constrained = authCount > 1 || grewViaFollow;
+    if (constrained) {
       managed.ptySizeWasMultiViewer = true;
       if (sizeChanged) {
         this.broadcast(managed, { type: "pty-size", cols, rows });

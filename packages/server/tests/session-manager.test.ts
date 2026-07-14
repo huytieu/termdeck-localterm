@@ -545,6 +545,50 @@ describe("SessionManager pty-size", { tags: ["integration"] }, () => {
     expect(spawned.session.cols).toBe(40);
     expect(spawned.session.rows).toBe(24);
   });
+
+  it("a wider follow (grid) tile grows the pty to fill and the full viewer masks", () => {
+    const sent: { ws: ClientSocket; payload: ServerToClientMessage }[] = [];
+    manager = new SessionManager({
+      sendControl: (ws, payload) => sent.push({ ws, payload }),
+      hooks: noopHooks,
+    });
+    const desktop = createFakeSocket();
+    const spawned = manager.spawnAndAttach(desktop, shellInput);
+    expect(spawned).not.toBeNull();
+    if (!spawned) return;
+    manager.promote(desktop, false);
+    manager.resize(desktop, 80, 24);
+    // A grid tile attaches in follow mode WIDER than the authoritative desktop.
+    const tile = createFakeSocket();
+    manager.attach(tile, spawned.id, null, "", true);
+    manager.promote(tile, false);
+    sent.length = 0;
+    manager.resize(tile, 120, 40);
+    // Grow-only: the pty widens to the tile so the tile fills, but never below
+    // the authoritative min, and rows stay at the desktop's height (growing rows
+    // would scroll the shorter viewer).
+    expect(spawned.session.cols).toBe(120);
+    expect(spawned.session.rows).toBe(24);
+    // The now-narrower desktop learns the grown width so it can mask the dead cols.
+    const grown = sent.filter(
+      (entry) => entry.payload.type === "pty-size" && entry.payload.cols === 120,
+    );
+    expect(grown.some((entry) => entry.ws === desktop)).toBe(true);
+
+    // The tile leaves → the pty returns to the desktop's own width → one clear
+    // frame erases the mask.
+    sent.length = 0;
+    manager.detach(tile);
+    expect(spawned.session.cols).toBe(80);
+    expect(
+      sent.filter(
+        (entry) =>
+          entry.ws === desktop &&
+          entry.payload.type === "pty-size" &&
+          entry.payload.cols === 80,
+      ).length,
+    ).toBeGreaterThan(0);
+  });
 });
 
 describe("SessionManager sessionsInPath", { tags: ["integration"] }, () => {
