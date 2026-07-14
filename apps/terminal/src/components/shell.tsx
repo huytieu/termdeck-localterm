@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { FileText } from "lucide-react";
 import {
   closeArtifact,
   openArtifact,
@@ -6,6 +7,7 @@ import {
   useShell,
   WIKI_OPEN_MESSAGE,
 } from "@/hooks/use-shell";
+import { readingMode, subscribeReadingMode } from "@/lib/reading-mode";
 import { ActivityBar } from "@/components/activity-bar";
 import { TermSidebar } from "@/components/term-sidebar";
 import { WikiSidebar } from "@/components/wiki-sidebar";
@@ -45,6 +47,9 @@ const readStoredArtifactWidth = (): number => {
 // leaving the current view — the terminal stays mounted underneath.
 export const Shell = () => {
   const { mode, sid, wikiPath, wikiLine, artifactPath, artifactLine, artifactSid } = useShell();
+  // Read the initial snapshot directly (not the `() => false` fallback) so
+  // there's no flash on mount when reading mode was already on.
+  const reading = useSyncExternalStore(subscribeReadingMode, readingMode, readingMode);
   const [sidebarWidth, setSidebarWidth] = useState(readStoredWidth);
   const [artifactWidth, setArtifactWidth] = useState(readStoredArtifactWidth);
   const [artifactExpanded, setArtifactExpanded] = useState(false);
@@ -128,11 +133,12 @@ export const Shell = () => {
   }, []);
 
   // Settings is a full-width detail surface with no contextual subnav.
-  const hasSidebar = mode === "term" || mode === "wiki";
+  // Reading mode force-hides the sidebar too, for distraction-free reading.
+  const hasSidebar = (mode === "term" || mode === "wiki") && !reading;
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
-      <ActivityBar mode={mode} />
+      {!reading && <ActivityBar mode={mode} />}
       {hasSidebar ? (
         <>
           <aside
@@ -167,7 +173,10 @@ export const Shell = () => {
           ) : wikiPath ? (
             <WikiDetail key={wikiPath} path={wikiPath} line={wikiLine} />
           ) : (
-            <div className="flex h-full items-center justify-center font-mono text-sm text-muted-foreground">
+            // B13: was generic monospace body text; now centered Public Sans
+            // with a muted file glyph, matching the wiki's chrome type scale.
+            <div className="flex h-full flex-col items-center justify-center gap-2 font-sans text-[14px] text-muted-foreground">
+              <FileText className="size-5 text-muted-foreground/60" />
               Select a file from the tree.
             </div>
           );

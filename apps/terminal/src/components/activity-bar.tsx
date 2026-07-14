@@ -1,6 +1,8 @@
-import { BookText, Settings, SquareTerminal } from "lucide-react";
+import { useSyncExternalStore } from "react";
+import { BookText, Moon, Settings, SquareTerminal, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { switchMode, type ShellMode } from "@/hooks/use-shell";
+import { currentTheme, subscribeTheme, toggleTheme } from "@/lib/theme";
 
 const Item = ({
   active,
@@ -45,8 +47,9 @@ export const ActivityBar = ({ mode }: { mode: ShellMode }) => (
       icon={<BookText className="size-5" />}
       onClick={() => switchMode("wiki")}
     />
-    {/* Settings pinned to the bottom, VS Code style. */}
+    {/* Theme toggle + Settings pinned to the bottom, VS Code style. */}
     <div className="mt-auto w-full">
+      <ThemeItem />
       <Item
         active={mode === "settings"}
         label="Settings"
@@ -56,3 +59,17 @@ export const ActivityBar = ({ mode }: { mode: ShellMode }) => (
     </div>
   </nav>
 );
+
+// Shared light/dark toggle for the whole termyard setup (writes the host-scoped
+// ty-theme cookie the terminal / wiki / kanban surfaces all read).
+const ThemeItem = () => {
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "dark");
+  return (
+    <Item
+      active={false}
+      label={theme === "dark" ? "Light mode" : "Dark mode"}
+      icon={theme === "dark" ? <Sun className="size-5" /> : <Moon className="size-5" />}
+      onClick={toggleTheme}
+    />
+  );
+};

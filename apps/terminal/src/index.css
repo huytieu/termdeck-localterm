@@ -14,8 +14,9 @@ body,
 
 body {
   margin: 0;
-  background: #101010;
-  color: #ffffff;
+  /* Follow the theme tokens (light/dark) instead of a hardcoded dark. */
+  background: var(--background);
+  color: var(--foreground);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -30,10 +31,14 @@ body {
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Public Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-reading-serif: "Charter", charter, Georgia, Cambria, "Times New Roman", serif;
+  --font-reading-mono: "IBM Plex Mono", ui-monospace, "Geist Mono", SFMono-Regular, Menlo, Consolas, monospace;
   /* Snappy product easing from animation-best-practices: sharp start, subtle deceleration. */
   --ease-snappy: cubic-bezier(0.32, 0.72, 0, 1);
+  --color-primary-hover: var(--primary-hover);
+  --color-code-bg: var(--code-bg);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -117,72 +122,81 @@ body {
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Light theme: memo.d.foundation's shipped tokens — warm #f8f8f8 paper with
+     white cards/popovers above it so surfaces visibly layer, coral primary
+     accent shared with dark, real hairline borders. */
+  --background: oklch(0.9791 0 0);
+  --foreground: oklch(0.2981 0.0091 276.8);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.2981 0.0091 276.8);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.2981 0.0091 276.8);
+  --primary: oklch(0.6134 0.1976 14.5);
+  --primary-foreground: oklch(1 0 0);
+  --primary-hover: oklch(0.6324 0.1625 11.7);
+  --secondary: oklch(0.9401 0 0);
+  --secondary-foreground: oklch(0.2981 0.0091 276.8);
+  --muted: oklch(0.9401 0 0);
+  --muted-foreground: oklch(0.503 0.0034 264.5);
+  --accent: oklch(0.9401 0 0);
+  --accent-foreground: oklch(0.2981 0.0091 276.8);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --border: oklch(0.9219 0 0);
+  --input: oklch(0.9219 0 0);
+  --ring: oklch(0.6134 0.1976 14.5);
+  --code-bg: oklch(0.9791 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.2981 0.0091 276.8);
+  --sidebar-primary: oklch(0.6134 0.1976 14.5);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.9401 0 0);
+  --sidebar-accent-foreground: oklch(0.503 0.0034 264.5);
+  --sidebar-border: oklch(0.9219 0 0);
+  --sidebar-ring: oklch(0.6134 0.1976 14.5);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* Dark theme: memo's #1e1e1e canvas (lighter than the previous near-black),
+     #dadada text, solid #3d3d3d hairlines, same shared coral primary. */
+  --background: oklch(0.235 0 0);
+  --foreground: oklch(0.8884 0 0);
+  --card: oklch(0.2768 0 0);
+  --card-foreground: oklch(0.8884 0 0);
+  --popover: oklch(0.2768 0 0);
+  --popover-foreground: oklch(0.8884 0 0);
+  --primary: oklch(0.6134 0.1976 14.5);
+  --primary-foreground: oklch(1 0 0);
+  --primary-hover: oklch(0.6324 0.1625 11.7);
+  --secondary: oklch(0.3092 0 0);
+  --secondary-foreground: oklch(0.8884 0 0);
+  --muted: oklch(0.3092 0 0);
+  --muted-foreground: oklch(0.6895 0 0);
+  --accent: oklch(0.3092 0 0);
+  --accent-foreground: oklch(0.8884 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --border: oklch(0.36 0 0);
+  --input: oklch(0.36 0 0);
+  --ring: oklch(0.6134 0.1976 14.5);
+  --code-bg: oklch(0.1822 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.2178 0 0);
+  --sidebar-foreground: oklch(0.8884 0 0);
+  --sidebar-primary: oklch(0.6134 0.1976 14.5);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.3092 0 0);
+  --sidebar-accent-foreground: oklch(0.6895 0 0);
+  --sidebar-border: oklch(0.36 0 0);
+  --sidebar-ring: oklch(0.6134 0.1976 14.5);
 }
 
 @layer base {
@@ -194,6 +208,12 @@ body {
   }
   html {
     @apply font-sans;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+  .wiki-prose ::selection {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
   }
 }
 
@@ -265,4 +285,203 @@ body {
 
 .xterm-scrollbar-thumb:active {
   background: rgba(255, 255, 255, 0.4);
+}
+
+/* Wiki file-view prose: memo.d.foundation's serif reading face (Charter, with
+   Georgia/Cambria fallback) at 15px/1.58 — the article body's single source of
+   truth for h1-h4/p/li/blockquote. Code/pre stay monospace via the reading-mono
+   token (Geist Mono, an accepted IBM Plex Mono substitute). */
+.wiki-prose {
+  font-family: var(--font-reading-serif);
+  font-size: 15px;
+  line-height: 1.58; /* 23.7px */
+  color: var(--foreground);
+}
+.wiki-prose code,
+.wiki-prose pre {
+  font-family: var(--font-reading-mono);
+}
+
+/* Tiny uppercase label used by UI chrome (info-panel section headers, eyebrow
+   captions) — always Public Sans, never the reading serif. */
+.eyebrow-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* Coral arrow bullets for unordered lists (memo accent). Tailwind can't express
+   ::before content / ::marker styling, so these live here; `ul`/`li` classes in
+   markdown.tsx handle spacing/indent. */
+.wiki-prose ul {
+  list-style: none;
+}
+.wiki-prose ul > li {
+  position: relative;
+  padding-left: 1.35em;
+}
+.wiki-prose ul > li::before {
+  content: "→";
+  position: absolute;
+  left: 0;
+  color: var(--primary);
+  font-weight: 600;
+}
+.wiki-prose ol > li::marker {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* WYSIWYG editor (TipTap / ProseMirror). The reading view's prose styles live
+   in markdown.tsx React component classes, which don't apply to the editor's
+   raw HTML tags — so mirror the memo reading scale here for the editor only. */
+.ProseMirror {
+  outline: none;
+}
+.ProseMirror h1 {
+  font-size: 35px;
+  font-weight: 600;
+  line-height: 42px;
+  letter-spacing: -0.025em;
+  margin: 22px 0 32px;
+  color: var(--foreground);
+}
+.ProseMirror h2 {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 30px;
+  letter-spacing: -0.017em;
+  margin: 28px 0 8px;
+  color: var(--foreground);
+}
+.ProseMirror h3 {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 26px;
+  letter-spacing: -0.016em;
+  margin: 22px 0 4px;
+  color: var(--foreground);
+}
+.ProseMirror h4 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+  margin: 18px 0 4px;
+  color: var(--foreground);
+}
+.ProseMirror h5,
+.ProseMirror h6 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 16px 0 4px;
+  color: var(--foreground);
+}
+.ProseMirror p {
+  margin: 16px 0;
+  line-height: 1.58;
+}
+.ProseMirror ol {
+  margin: 8px 0;
+  padding-left: 1.5em;
+  list-style: decimal;
+}
+.ProseMirror ol > li::marker {
+  color: var(--primary);
+  font-weight: 600;
+}
+.ProseMirror li {
+  margin: 4px 0;
+}
+/* Task lists: no coral arrow, checkbox + text on one row. */
+.wiki-prose ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+.wiki-prose ul[data-type="taskList"] > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  padding-left: 0;
+}
+.wiki-prose ul[data-type="taskList"] > li::before {
+  content: none;
+}
+.wiki-prose ul[data-type="taskList"] input[type="checkbox"] {
+  margin-top: 0.35em;
+  accent-color: var(--primary);
+}
+.ProseMirror blockquote {
+  margin: 12px 0;
+  border-left: 3px solid var(--border);
+  padding-left: 1rem;
+  font-style: italic;
+  color: var(--muted-foreground);
+}
+.ProseMirror :not(pre) > code {
+  background: var(--muted);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  font-size: 0.88em;
+  font-family: var(--font-reading-mono);
+}
+.ProseMirror pre {
+  margin: 12px 0;
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 14px;
+  overflow-x: auto;
+  font-family: var(--font-reading-mono);
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+.ProseMirror pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.ProseMirror table {
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.ProseMirror th {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-foreground);
+}
+.ProseMirror a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ProseMirror hr {
+  margin: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.ProseMirror img {
+  margin: 12px 0;
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  opacity: 0.5;
+  float: left;
+  height: 0;
+  pointer-events: none;
 }

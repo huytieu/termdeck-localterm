@@ -1,5 +1,6 @@
 import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
+import { currentTheme } from "@/lib/theme";
 
 export interface SyntaxToken {
   content: string;
@@ -97,7 +98,9 @@ const FILENAME_TO_LANG: Record<string, string> = {
   Makefile: "make",
 };
 
-const THEME_ID = "dark-plus";
+// Syntax theme follows the app theme: a light shiki theme in light mode (so
+// tokens aren't washed out on a white background), dark-plus in dark mode.
+const THEME_IDS = { dark: "dark-plus", light: "github-light" } as const;
 
 interface TokenCacheEntry {
   contentKey: string;
@@ -126,7 +129,7 @@ const loadedLangIds = new Set<string>();
 const getHighlighter = () => {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighterCore({
-      themes: [import("@shikijs/themes/dark-plus")],
+      themes: [import("@shikijs/themes/dark-plus"), import("@shikijs/themes/github-light")],
       langs: [],
       engine: createJavaScriptRegexEngine(),
     });
@@ -134,7 +137,10 @@ const getHighlighter = () => {
   return highlighterPromise;
 };
 
-const contentKey = (lines: readonly string[]): string => lines.join("\n");
+// Theme is part of the cache key so flipping light/dark re-tokenizes instead of
+// serving stale colors.
+const contentKey = (lines: readonly string[]): string =>
+  `${currentTheme()}\n${lines.join("\n")}`;
 
 export const getCachedTokens = (
   filePath: string,
@@ -173,7 +179,7 @@ export const tokenizeDiffLines = async (
     const code = lines.join("\n");
     const themedTokens = highlighter.codeToTokens(code, {
       lang: langId,
-      theme: THEME_ID,
+      theme: THEME_IDS[currentTheme()],
     });
 
     const result = themedTokens.tokens.map((line) => ({

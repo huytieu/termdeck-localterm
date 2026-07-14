@@ -1,5 +1,6 @@
 import { Copy, FileCode, FileText, Folder, SquarePen, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { currentTheme, subscribeTheme } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
@@ -71,6 +72,8 @@ export const SourceView = ({
   const [tokenLines, setTokenLines] = useState<readonly SyntaxLine[] | null>(null);
   const focusRef = useRef<HTMLDivElement | null>(null);
   const lines = content.split("\n");
+  // Re-tokenize when the theme flips so syntax colors match light/dark.
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "dark");
 
   useEffect(() => {
     let cancelled = false;
@@ -83,7 +86,7 @@ export const SourceView = ({
     return () => {
       cancelled = true;
     };
-  }, [path, content]);
+  }, [path, content, theme]);
 
   useEffect(() => {
     focusRef.current?.scrollIntoView({ block: "center" });
@@ -104,7 +107,7 @@ export const SourceView = ({
             className={cn("flex px-4", isFocus && "bg-amber-400/15")}
           >
             <span
-              className="mr-3 shrink-0 select-none text-right text-muted-foreground/40 tabular-nums"
+              className="mr-3 shrink-0 select-none text-right text-muted-foreground/70 tabular-nums"
               style={{ width: gutterWidth }}
             >
               {lineNumber}
@@ -318,8 +321,8 @@ export const FilePreviewModal = ({
                 </div>
               )}
               {markdown && !showMarkdownSource ? (
-                <div className="px-5 py-4 font-mono text-xs">
-                  <Markdown>{result.content}</Markdown>
+                <div className="wiki-prose mx-auto max-w-[710px] px-5 py-4 text-[15px]">
+                  <Markdown sourcePath={result.path}>{result.content}</Markdown>
                 </div>
               ) : (
                 <div className="py-3">

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -14,7 +14,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
     />
     <link
       rel="icon"
@@ -29,6 +29,19 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="localterm" />
     <title>localterm</title>
+    <!-- termyard shared theme: follow the host-scoped ty-theme cookie (set by the
+         wiki/kanban toggle), else prefers-color-scheme. Runs before the module
+         script and before paint, and resyncs when the tab regains focus. -->
+    <script>
+      (function () {
+        function ck() { var m = document.cookie.match(/(?:^|; )ty-theme=(light|dark)/); return m ? m[1] : null; }
+        function cur() { return ck() || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'); }
+        function apply(t) { var d = document.documentElement; d.classList.toggle('dark', t === 'dark'); d.style.colorScheme = t; }
+        try { apply(cur()); } catch (e) { document.documentElement.classList.add('dark'); }
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) apply(cur()); });
+        addEventListener('pageshow', function () { apply(cur()); });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,72 +1,69 @@
-# localterm
+# TermDeck
 
-[![version](https://img.shields.io/npm/v/@monotykamary/localterm?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/@monotykamary/localterm)
-[![downloads](https://img.shields.io/npm/dt/@monotykamary/localterm.svg?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/@monotykamary/localterm)
+**Your terminal and your notes, in one browser tab.**
 
-Your terminal should just be a browser tab.
+TermDeck is a browser-native workspace that fuses two things: a terminal multiplexer where **every tab is a shell**, and a **Markdown knowledge workspace** for reading and writing the notes those shells live next to. Run agents in the terminal on the left, read and edit the docs they touch on the right — same tab, same tool, reachable from any device on your tailnet.
 
-Run `npx @monotykamary/localterm@latest start` and every browser tab is one shell. Open a new tab to spawn another. Close a tab and its shell waits in the session switcher (top-right) for a short grace window — switch back to it in that window, or it's reaped. That's the whole product.
+> **TermDeck is a fork of [localterm](https://github.com/monotykamary/localterm)** (MIT, by [@monotykamary](https://github.com/monotykamary)) — all of the terminal foundation is its work. The knowledge/wiki workspace is inspired by [anh-chu/wiki-viewer](https://github.com/anh-chu/wiki-viewer). See [Credits](#credits).
 
-![demo](https://www.localterm.dev/demo.png)
+---
 
-## Install
+## What you get
 
-```bash
-npx @monotykamary/localterm@latest start
-```
+### Terminal — shell = browser tab _(from localterm)_
 
-This boots a local daemon and opens a browser tab. The URL depends on what's
-installed on the machine — `localterm status` shows the active one:
+- **New tab → new shell.** Close a tab and its shell waits in the session switcher for a short grace window; a shell still producing output or running a foreground program is never reaped mid-command.
+- **Live grid** of every session as interactive tiles, a fast session switcher, and reattach-on-reconnect.
+- Reachable over your **tailnet** (`https://<node>.ts.net`), a portless local alias, or loopback — no `/etc/hosts` edits.
 
-| Surface      | URL                               | Requires                                                                                                                                  |
-| ------------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **tailnet**  | `https://<your-node>.ts.net`      | [Tailscale](https://tailscale.com) connected, HTTPS certs enabled for the tailnet                                                         |
-| **local**    | `https://localterm.localhost`     | `portless` (installed via `localterm install`)                                                                                            |
-| **loopback** | `http://localterm.localhost:3417` | nothing — `.localhost` resolves to `127.0.0.1` via [RFC 6761](https://datatracker.ietf.org/doc/html/rfc6761), no `/etc/hosts` edit needed |
+**TermDeck additions to the terminal:**
 
-To install globally: `npm install -g @monotykamary/localterm && localterm start`.
+- **At-a-glance session status.** A minimal colored glyph per session: `●` amber = running, `●` coral = needs your input, `○` green = idle/done — so you can scan which agent needs you.
+- **Hover-to-kill.** A small `✕` on each session row; no trip to the grid.
+- **Claude usage quota in the header.** Session (5h) and weekly limits with a bar, % remaining, and reset countdown — read from the same source your statusline uses.
 
-## Usage
+### Wiki — a reading & writing workspace for your vault _(TermDeck)_
 
-The mental model is **shell = browser tab**:
+- **Browse your vault** as a file tree with persistent expand/collapse, extension filters, hide-dotfiles, and full-text search.
+- **A reading surface, not a file dump.** Serif reading typography, a centered measure, a coral accent, and a right-hand info panel (Properties / Location / Stats — word count, blocks, reading time computed live). Toggle **reading mode** to hide all chrome.
+- **WYSIWYG editor**, Notion/Obsidian style — headings, lists, tasks, tables, code, links — with a faithful Markdown round-trip (frontmatter preserved verbatim, `[[wikilinks]]` intact). Flip to raw Markdown source anytime.
+- **New note** in a click (defaults to `.md`), `[[wikilinks]]`, inline color swatches for hex/rgb values, and syntax-highlighted code (light/dark).
+- Light and dark themes across the whole app, with one shared toggle.
 
-- **New tab** → new shell.
-- **Close tab** → the shell detaches and waits in the session switcher (top-right) for ~30s; reattach in that window or it's reaped. A shell still producing output (a build) or running a foreground program (a `sleep`) is kept alive, so a closed tab never kills a running command.
-- **Reload tab** → fresh shell (the prior one waits in the switcher like a closed tab).
-- **Switch** → the session switcher (top-right, or <kbd>⌘</kbd>/<kbd>Ctrl</kbd>+<kbd>I</kbd>) re-points this tab at any live shell; search by title, path, or shell.
+---
 
-Transient connection drops silently reattach to the same shell. If you want a shell that survives a full page reload in the _same_ tab, run `tmux` _inside_ localterm. → full model in [Usage](docs/usage.md).
-
-## Features
-
-|                                                         |                                                                                                                                                                         |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 🐚 [**Shells**](docs/shells.md)                         | Pick a shell per tab, per CLI call, or globally (`LOCALTERM_SHELL`); login profiles + OSC 7 / git-dirty hooks for zsh, bash, fish.                                      |
-| 🎨 [**Themes & fonts**](docs/appearance.md)             | 19 built-in themes (16 dark + 3 light) + **Auto (system)**; import your own (JSON or iTerm `.itermcolors`); 11 bundled fonts + a custom system Nerd Font — all offline. |
-| ⏰ [**Automations**](docs/automations.md)               | Scheduled + folder-watch + event + webhook jobs; shell or headless agent runners; background tabs.                                                                      |
-| 🚀 [**Auto-start & remote access**](docs/auto-start.md) | launchd (macOS) / systemd user unit (Linux); Tailscale or an ssh tunnel turns a VPS into an ssh + tmux replacement.                                                     |
-| 🔐 [**Identity & SSO**](docs/identity.md)               | Multi-user access via `header` (reverse proxy), `passkey` (WebAuthn), or `oidc`.                                                                                        |
-| 🤖 [**pi integration**](docs/pi.md)                     | Kitty graphics + OSC 8 links, and secret scrubbing for pi's bash tool.                                                                                                  |
-| 🛡️ [**Security**](docs/security.md)                     | Loopback-bound by default; DNS-rebinding defense; safe sharing.                                                                                                         |
-
-## CLI
+## Quickstart
 
 ```bash
-localterm start [-p 3417] [-H 127.0.0.1] [--open]   # daemonizes by default
-localterm stop | status | restart
-localterm install                                  # auto-start service + URL surfaces + completions
-localterm exec "<cmd>" [--cwd <path>] [--shell <path>] [--json]   # one-shot: run, capture, exit with its code
-localterm session new|ls|attach|exec|capture|kill <id> …           # tmux-parity PTY control
-localterm secret list|get|set|delete <name>                       # Keychain-backed per-program secrets
+git clone https://github.com/huytieu/termdeck-localterm
+cd termdeck-localterm
+pnpm install
+pnpm build
+pnpm start          # boots the daemon and serves TermDeck
+pnpm cli status     # shows the active URL
 ```
 
-State lives in `~/.localterm/` (PID, port, server log at `~/.localterm/server.log`). → full reference in [CLI](docs/cli.md).
+Open the URL `pnpm cli status` prints (loopback works with zero setup: `http://localterm.localhost:3417`). `pnpm stop` stops the daemon.
 
-## Resources & contributing
+The mental model is **shell = browser tab**; switch to Wiki mode from the left rail to browse and edit your Markdown vault. Full docs live in [`docs/`](docs/).
 
-- 🐛 [Issue tracker](https://github.com/monotykamary/localterm/issues) · 💬 [Pull requests welcome](https://github.com/monotykamary/localterm/blob/main/CONTRIBUTING.md)
-- 📖 [**Full docs**](docs/README.md) · 🤝 [Contributing guide](https://github.com/monotykamary/localterm/blob/main/CONTRIBUTING.md) · 📝 [AGENTS.md](https://github.com/monotykamary/localterm/blob/main/AGENTS.md) (code style)
+---
 
-### License
+## Screens
 
-localterm is MIT-licensed open-source software.
+A landing page with the full walkthrough lives in [`landing/index.html`](landing/index.html) — open it in any browser. It's self-contained (no build step, no external requests).
+
+---
+
+## Credits
+
+TermDeck stands on other people's work and says so:
+
+- **[localterm](https://github.com/monotykamary/localterm)** by [@monotykamary](https://github.com/monotykamary) — the entire terminal foundation (session model, daemon, tailnet serve, grid). TermDeck is a fork of it.
+- **[anh-chu/wiki-viewer](https://github.com/anh-chu/wiki-viewer)** — the inspiration for the in-app Markdown wiki workspace.
+
+TermDeck's own additions: the memo-style reading view, the WYSIWYG editor, the file-tree filters + persistence + new-file flow, session status glyphs, hover-kill, and the usage-quota header.
+
+## License
+
+[MIT](LICENSE) — inherited from localterm. The original copyright and license are preserved unchanged; TermDeck's additions are MIT as well.

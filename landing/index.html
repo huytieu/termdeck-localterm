@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TermDeck — your terminal and your notes, in one tab</title>
+    <meta
+      name="description"
+      content="TermDeck fuses a browser-native terminal multiplexer with a Markdown knowledge workspace. A fork of localterm."
+    />
+    <style>
+      :root {
+        --bg: #1e1e1e;
+        --panel: #282828;
+        --panel2: #222;
+        --fg: #dadada;
+        --muted: #9b9b9b;
+        --dim: #6b6b6b;
+        --border: #3d3d3d;
+        --coral: #e13f5e;
+        --coral-soft: rgba(225, 63, 94, 0.14);
+        --green: #4ec9a0;
+        --amber: #e5b567;
+        --serif: "Charter", Georgia, Cambria, "Times New Roman", serif;
+        --sans: "Public Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--coral); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+      .eyebrow {
+        font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
+        text-transform: uppercase; color: var(--coral); margin: 0 0 14px;
+      }
+      h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.02em; color: #fff; }
+
+      /* Nav */
+      nav {
+        position: sticky; top: 0; z-index: 20; backdrop-filter: blur(8px);
+        background: rgba(30, 30, 30, 0.8); border-bottom: 1px solid var(--border);
+      }
+      nav .wrap { display: flex; align-items: center; gap: 20px; height: 56px; }
+      .brand { font-family: var(--mono); font-weight: 700; letter-spacing: 0.06em; color: #fff; }
+      .brand b { color: var(--coral); }
+      nav .spacer { flex: 1; }
+      nav a { color: var(--muted); font-size: 14px; }
+      nav a:hover { color: var(--fg); text-decoration: none; }
+      .btn {
+        display: inline-flex; align-items: center; gap: 7px; border-radius: 8px;
+        padding: 9px 16px; font-size: 14px; font-weight: 600; border: 1px solid transparent;
+        transition: all 0.15s;
+      }
+      .btn-primary { background: var(--coral); color: #fff; }
+      .btn-primary:hover { background: #d95870; text-decoration: none; }
+      .btn-ghost { border-color: var(--border); color: var(--fg); }
+      .btn-ghost:hover { border-color: var(--muted); text-decoration: none; }
+
+      /* Hero */
+      header.hero { padding: 92px 0 56px; text-align: center; }
+      header.hero h1 { font-size: 58px; line-height: 1.05; margin: 0 0 22px; }
+      header.hero h1 .c { color: var(--coral); }
+      header.hero p.lede {
+        font-size: 19px; color: var(--muted); max-width: 620px; margin: 0 auto 30px; line-height: 1.6;
+      }
+      .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+      .fork-note { margin-top: 26px; font-size: 13px; color: var(--dim); }
+
+      /* App mock */
+      .mock {
+        margin: 40px auto 0; max-width: 940px; border: 1px solid var(--border);
+        border-radius: 12px; overflow: hidden; background: var(--bg);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+      }
+      .mock .titlebar {
+        display: flex; align-items: center; gap: 7px; padding: 10px 14px;
+        background: var(--panel); border-bottom: 1px solid var(--border);
+      }
+      .mock .titlebar .dot { width: 11px; height: 11px; border-radius: 50%; background: #3d3d3d; }
+      .mock .titlebar .url {
+        margin-left: 10px; font-family: var(--mono); font-size: 11px; color: var(--dim);
+      }
+      .mock .body { display: grid; grid-template-columns: 48px 216px 1fr; min-height: 380px; }
+      .rail {
+        background: #1a1a1a; border-right: 1px solid var(--border); padding: 12px 0;
+        display: flex; flex-direction: column; align-items: center; gap: 14px;
+      }
+      .rail .logo { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--muted); }
+      .rail .ico { width: 20px; height: 20px; border-radius: 5px; }
+      .rail .ico.on { background: var(--coral-soft); box-shadow: inset 0 0 0 1px var(--coral); }
+      .rail .ico.off { background: #2a2a2a; }
+      .side { border-right: 1px solid var(--border); padding: 12px 0; font-family: var(--mono); }
+      .side .hd {
+        font-size: 10px; letter-spacing: 0.1em; color: var(--dim); padding: 0 14px 10px;
+        text-transform: uppercase;
+      }
+      .srow { display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12px; color: var(--fg); }
+      .srow .g { width: 8px; text-align: center; }
+      .srow small { color: var(--dim); }
+      .g-run { color: var(--amber); }
+      .g-need { color: var(--coral); }
+      .g-idle { color: var(--green); }
+      .main { padding: 34px 40px; overflow: hidden; }
+      .main .doc-h1 { font-family: var(--serif); font-size: 30px; color: #fff; margin: 0 0 8px; letter-spacing: -0.02em; }
+      .main .doc-h2 { font-family: var(--serif); font-size: 19px; color: #fff; margin: 22px 0 6px; }
+      .main p { font-family: var(--serif); font-size: 15px; color: var(--fg); margin: 10px 0; max-width: 60ch; }
+      .main ul { font-family: var(--serif); list-style: none; padding: 0; margin: 10px 0; }
+      .main li { position: relative; padding-left: 20px; font-size: 15px; margin: 5px 0; }
+      .main li::before { content: "→"; position: absolute; left: 0; color: var(--coral); font-weight: 600; }
+      .aside {
+        float: right; width: 150px; margin: 0 0 16px 28px; border-left: 1px solid var(--border);
+        padding-left: 18px; font-family: var(--sans);
+      }
+      .aside .lbl { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); margin: 0 0 8px; }
+      .aside .kv { display: flex; justify-content: space-between; font-size: 12px; margin: 3px 0; }
+      .aside .kv .v { color: var(--fg); }
+      .aside .kv .k { color: var(--muted); }
+      .aside .tag { display: inline-block; font-size: 11px; color: var(--coral); background: var(--coral-soft); border-radius: 5px; padding: 1px 6px; }
+
+      /* Sections */
+      section { padding: 72px 0; border-top: 1px solid var(--border); }
+      section h2 { font-size: 34px; margin: 0 0 10px; }
+      section .sub { color: var(--muted); font-size: 16px; max-width: 640px; margin: 0 0 40px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+      .card {
+        border: 1px solid var(--border); border-radius: 12px; padding: 22px 22px 24px; background: var(--panel2);
+      }
+      .card .k { font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--coral); margin: 0 0 10px; }
+      .card h3 { font-size: 19px; margin: 0 0 8px; }
+      .card p { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.6; }
+      .legend { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 8px; font-family: var(--mono); font-size: 13px; }
+      .legend span b { font-weight: 400; }
+
+      /* Quickstart */
+      pre {
+        background: #151515; border: 1px solid var(--border); border-radius: 10px;
+        padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px;
+        line-height: 1.7; color: var(--fg); margin: 0;
+      }
+      pre .c { color: var(--dim); }
+      pre .p { color: var(--coral); }
+
+      footer { padding: 48px 0 64px; border-top: 1px solid var(--border); color: var(--dim); font-size: 13px; }
+      footer a { color: var(--muted); }
+      footer .credits { margin-top: 10px; line-height: 1.8; }
+
+      @media (max-width: 760px) {
+        header.hero h1 { font-size: 40px; }
+        .mock .body { grid-template-columns: 40px 150px 1fr; }
+        .aside { display: none; }
+        .main { padding: 24px; }
+      }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <div class="wrap">
+        <span class="brand">Term<b>Deck</b></span>
+        <span class="spacer"></span>
+        <a href="#features">Features</a>
+        <a href="#start">Quickstart</a>
+        <a href="https://github.com/huytieu/termdeck-localterm">GitHub</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <div class="wrap">
+        <p class="eyebrow">Terminal · Knowledge workspace</p>
+        <h1>Your terminal and your notes,<br />in <span class="c">one browser tab</span>.</h1>
+        <p class="lede">
+          Run shells and agents where every tab is a session. Read and write the Markdown they touch
+          right beside them — a proper reading surface and a Notion-style editor. Reachable from any
+          device on your tailnet.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#start">Get started →</a>
+          <a class="btn btn-ghost" href="https://github.com/huytieu/termdeck-localterm">View on GitHub</a>
+        </div>
+        <p class="fork-note">A fork of <a href="https://github.com/monotykamary/localterm">localterm</a> (MIT) · MIT licensed</p>
+
+        <!-- Recreated UI (no real data) -->
+        <div class="mock" aria-hidden="true">
+          <div class="titlebar">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            <span class="url">localterm.localhost — wiki</span>
+          </div>
+          <div class="body">
+            <div class="rail">
+              <span class="logo">TD</span>
+              <span class="ico off"></span>
+              <span class="ico on"></span>
+            </div>
+            <div class="side">
+              <div class="hd">Terminals</div>
+              <div class="srow"><span class="g g-run">●</span> dev server</div>
+              <div class="srow"><span class="g g-need">●</span> agent · refactor auth</div>
+              <div class="srow"><span class="g g-idle">○</span> notes build</div>
+              <div class="hd" style="margin-top:16px">Explorer</div>
+              <div class="srow">📁 projects</div>
+              <div class="srow">📄 roadmap.md</div>
+              <div class="srow">📄 welcome.md</div>
+            </div>
+            <div class="main">
+              <div class="aside">
+                <div class="lbl">Properties</div>
+                <div class="kv"><span class="k">Created</span><span class="v">Jul 14</span></div>
+                <div class="kv"><span class="k">Tags</span><span class="tag">roadmap</span></div>
+                <div class="lbl" style="margin-top:16px">Stats</div>
+                <div class="kv"><span class="k">Words</span><span class="v">312</span></div>
+                <div class="kv"><span class="k">Reading</span><span class="v">2m</span></div>
+              </div>
+              <div class="doc-h1">Q3 Roadmap</div>
+              <p>A reading surface, not a file dump — serif type, a calm measure, and the metadata tucked into a side panel.</p>
+              <div class="doc-h2">Themes</div>
+              <ul>
+                <li>Ship the editor round-trip</li>
+                <li>Session status at a glance</li>
+                <li>Usage quota in the header</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section id="features">
+      <div class="wrap">
+        <p class="eyebrow">The terminal</p>
+        <h2>Every tab is a shell.</h2>
+        <p class="sub">
+          The full localterm session model — open a tab to spawn a shell, close it and it waits in the
+          switcher, never reaped mid-command. TermDeck adds the signals you need to run a fleet of agents.
+        </p>
+        <div class="grid">
+          <div class="card">
+            <p class="k">Status at a glance</p>
+            <h3>Know who needs you</h3>
+            <p>A minimal colored glyph per session, so a screen full of agents tells you where to look.</p>
+            <div class="legend">
+              <span class="g-run">● <b>running</b></span>
+              <span class="g-need">● <b>needs you</b></span>
+              <span class="g-idle">○ <b>idle · done</b></span>
+            </div>
+          </div>
+          <div class="card">
+            <p class="k">Hover to kill</p>
+            <h3>Stop a session in place</h3>
+            <p>A small ✕ appears on each row — end a run from the list without opening the grid.</p>
+          </div>
+          <div class="card">
+            <p class="k">Usage quota</p>
+            <h3>Limits in the header</h3>
+            <p>Session and weekly bars with % remaining and reset countdown, right where you work.</p>
+            <div class="legend"><span class="g-idle">s:▰▰▱▱▱ 52% ↻2h</span> <span class="g-idle">w:▰▰▰▰▱ 94% ↻6d</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap">
+        <p class="eyebrow">The wiki</p>
+        <h2>A home for your Markdown.</h2>
+        <p class="sub">
+          The notes your shells live next to, made legible. Browse the vault, read it like a document, and
+          edit it like Notion — without leaving the tab.
+        </p>
+        <div class="grid">
+          <div class="card">
+            <p class="k">Read</p>
+            <h3>A calm reading surface</h3>
+            <p>Serif type, a centered measure, coral accents, and a Properties / Location / Stats panel with live word count and reading time. Reading mode hides all the chrome.</p>
+          </div>
+          <div class="card">
+            <p class="k">Write</p>
+            <h3>WYSIWYG that keeps your Markdown</h3>
+            <p>Headings, lists, tasks, tables, code — edited as rich blocks with a faithful round-trip. Frontmatter and <code style="color:var(--coral)">[[wikilinks]]</code> stay intact. Flip to raw source anytime.</p>
+          </div>
+          <div class="card">
+            <p class="k">Organize</p>
+            <h3>A file tree that remembers</h3>
+            <p>Persistent expand/collapse, extension filters, full-text search, one-click new note (defaults to <code style="color:var(--coral)">.md</code>), inline color swatches, and syntax-highlighted code.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="start">
+      <div class="wrap">
+        <p class="eyebrow">Quickstart</p>
+        <h2>Running in a minute.</h2>
+        <p class="sub">Clone, build, and start the daemon. Loopback needs zero setup; a tailnet gives you every device.</p>
+        <pre><span class="c"># clone &amp; build</span>
+git clone https://github.com/huytieu/termdeck-localterm
+<span class="p">cd</span> termdeck-localterm
+pnpm install
+pnpm build
+
+<span class="c"># boot the daemon, then open the URL it prints</span>
+pnpm start
+pnpm cli status   <span class="c"># → http://localterm.localhost:3417</span></pre>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap">
+        <span class="brand">Term<b>Deck</b></span> — your terminal and your notes, in one tab.
+        <div class="credits">
+          A fork of <a href="https://github.com/monotykamary/localterm">localterm</a> by @monotykamary (MIT) — the terminal foundation is its work.<br />
+          The Markdown wiki workspace is inspired by <a href="https://github.com/anh-chu/wiki-viewer">anh-chu/wiki-viewer</a>.<br />
+          MIT licensed · additions © the TermDeck contributors.
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>

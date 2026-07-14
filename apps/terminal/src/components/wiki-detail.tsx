@@ -1,11 +1,41 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { File, FileText, Folder, Globe, Link2, Pencil, Sparkles, SquareTerminal } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import {
+  BookOpen,
+  File,
+  FileText,
+  Folder,
+  Globe,
+  Link2,
+  PanelRight,
+  PanelRightClose,
+  Pencil,
+  Sparkles,
+  SquareTerminal,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Markdown } from "@/components/markdown";
+import { WysiwygEditor } from "@/components/wysiwyg-editor";
 import { openSession, openWikiFile } from "@/hooks/use-shell";
 import { createSession, chatAboutSelection } from "@/lib/deck-session";
+import {
+  infoPanelOpen,
+  readingMode,
+  setInfoPanelOpen,
+  setReadingMode,
+  subscribeInfoPanel,
+  subscribeReadingMode,
+  toggleReadingMode,
+} from "@/lib/reading-mode";
 
 const SESSION_BASE_DIR_KEY = "termdeck:sessionBaseDir";
 import { CsvView } from "@/components/csv-view";
@@ -57,27 +87,158 @@ const parseFrontmatter = (raw: string): Frontmatter => {
   return { fields, body: raw.slice(match[0].length) };
 };
 
-const FrontmatterCard = ({ fields }: { fields: { key: string; value: string }[] }) => {
-  if (fields.length === 0) return null;
-  const title = fields.find((f) => f.key.toLowerCase() === "title")?.value;
-  const rest = fields.filter((f) => f.key.toLowerCase() !== "title");
+// Frontmatter key -> humanized label, for any field not covered by the
+// PROPERTIES priority mapping below (e.g. `updated_at` -> `Updated At`).
+const humanizeKey = (key: string): string =>
+  key.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+interface PropertyRow {
+  label: string;
+  value: string;
+}
+
+interface Properties {
+  rows: PropertyRow[];
+  tags: string[] | null;
+}
+
+// Build the PROPERTIES section rows: Created / Author / Co-author / Views /
+// Tags in priority order (when present), then every remaining frontmatter key
+// as its own humanized row. `title` is always excluded — it's the document H1.
+const buildProperties = (fields: { key: string; value: string }[]): Properties => {
+  const used = new Set<string>();
+  const rows: PropertyRow[] = [];
+
+  const take = (label: string, keys: string[]): void => {
+    const field = fields.find((f) => keys.includes(f.key.toLowerCase()));
+    if (!field) return;
+    used.add(field.key);
+    rows.push({ label, value: field.value });
+  };
+
+  take("Created", ["created", "date"]);
+  take("Author", ["author"]);
+  take("Co-author", ["co-author", "coauthor"]);
+  take("Views", ["views"]);
+
+  const tagsField = fields.find((f) => f.key.toLowerCase() === "tags");
+  const tags = tagsField
+    ? tagsField.value
+        .split(", ")
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : null;
+  if (tagsField) used.add(tagsField.key);
+
+  for (const f of fields) {
+    if (f.key.toLowerCase() === "title" || used.has(f.key)) continue;
+    rows.push({ label: humanizeKey(f.key), value: f.value });
+  }
+
+  return { rows, tags };
+};
+
+// Folder relative to the vault root in leading-slash form (e.g. `/updates/digest`).
+// Falls back to the absolute directory when the root hasn't resolved yet.
+const folderLabel = (path: string, vaultRoot: string | null): string => {
+  const dir = dirOf(path);
+  if (vaultRoot && dir.startsWith(vaultRoot)) {
+    const rel = dir.slice(vaultRoot.length);
+    return rel === "" ? "/" : rel.startsWith("/") ? rel : `/${rel}`;
+  }
+  return dir;
+};
+
+interface Stats {
+  words: number;
+  chars: number;
+  blocks: number;
+  readingTime: number;
+}
+
+const computeStats = (body: string): Stats => {
+  const t = body.trim();
+  const words = t ? t.split(/\s+/).length : 0;
+  const chars = body.length;
+  const blocks = body
+    .split(/\n\s*\n/)
+    .map((s) => s.trim())
+    .filter(Boolean).length;
+  const readingTime = Math.max(1, Math.ceil(words / 200));
+  return { words, chars, blocks, readingTime };
+};
+
+const InfoSection = ({ label, children }: { label: string; children: ReactNode }) => (
+  <div>
+    <div className="eyebrow-label mb-2.5">{label}</div>
+    <div className="space-y-0">{children}</div>
+  </div>
+);
+
+const InfoRow = ({ label, value }: { label: string; value: ReactNode }) => (
+  <div className="flex items-baseline justify-between gap-3 py-[3px]">
+    <span className="font-sans text-[14px] text-muted-foreground">{label}</span>
+    <span className="font-sans text-[14px] tabular-nums text-foreground text-right">{value}</span>
+  </div>
+);
+
+const TagChip = ({ tag }: { tag: string }) => (
+  <span
+    className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[12px] leading-none text-primary"
+    style={{ background: "color-mix(in oklab, var(--primary) 12%, transparent)" }}
+  >
+    {tag}
+  </span>
+);
+
+// Right info panel: PROPERTIES / LOCATION / STATS. Replaces the old full-width
+// FrontmatterCard stacked above the body (B1) — no card border/background
+// around the panel itself, it sits in the page bg; the only rule is the 1px
+// left divider on the enclosing <aside>.
+const InfoPanel = ({
+  fields,
+  path,
+  body,
+  vaultRoot,
+}: {
+  fields: { key: string; value: string }[];
+  path: string;
+  body: string;
+  vaultRoot: string | null;
+}) => {
+  const { rows, tags } = useMemo(() => buildProperties(fields), [fields]);
+  const stats = useMemo(() => computeStats(body), [body]);
+  const folder = folderLabel(path, vaultRoot);
+  const hasProperties = rows.length > 0 || (tags && tags.length > 0);
+
   return (
-    <div className="mb-4 rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
-      {title ? (
-        <div className="mb-2 font-sans text-base font-semibold leading-snug text-foreground">
-          {title}
-        </div>
-      ) : null}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        {rest.map((f) => (
-          <div key={f.key} className="contents">
-            <dt className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-              {f.key}
-            </dt>
-            <dd className="min-w-0 break-words text-[11px] text-foreground/90">{f.value}</dd>
-          </div>
-        ))}
-      </dl>
+    <div className="space-y-6">
+      {hasProperties && (
+        <InfoSection label="Properties">
+          {rows.map((r) => (
+            <InfoRow key={r.label} label={r.label} value={r.value} />
+          ))}
+          {tags && tags.length > 0 && (
+            <div className="flex items-baseline justify-between gap-3 py-[3px]">
+              <span className="font-sans text-[14px] text-muted-foreground">Tags</span>
+              <div className="flex flex-wrap justify-end gap-1">
+                {tags.map((tag) => (
+                  <TagChip key={tag} tag={tag} />
+                ))}
+              </div>
+            </div>
+          )}
+        </InfoSection>
+      )}
+      <InfoSection label="Location">
+        <InfoRow label="Folder" value={folder} />
+      </InfoSection>
+      <InfoSection label="Stats">
+        <InfoRow label="Words" value={stats.words} />
+        <InfoRow label="Characters" value={stats.chars} />
+        <InfoRow label="Blocks" value={stats.blocks} />
+        <InfoRow label="Reading time" value={`${stats.readingTime}m`} />
+      </InfoSection>
     </div>
   );
 };
@@ -187,6 +348,9 @@ export const WikiDetail = ({
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Edit a markdown file as WYSIWYG (default) or raw markdown source. Non-md
+  // text files always edit as raw source.
+  const [editRaw, setEditRaw] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -201,6 +365,35 @@ export const WikiDetail = ({
   const [ai, setAi] = useState<{ selection: string; anchor: { top: number; left: number } } | null>(
     null,
   );
+  const [vaultRoot, setVaultRoot] = useState<string | null>(null);
+  const reading = useSyncExternalStore(subscribeReadingMode, readingMode, () => false);
+  const infoPanel = useSyncExternalStore(subscribeInfoPanel, infoPanelOpen, () => true);
+
+  // LOCATION needs a known vault root to strip into a leading-slash relative
+  // path; fall back to the absolute directory (folderLabel) when unavailable.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/wiki/root", { signal: controller.signal })
+      .then((response) => (response.ok ? (response.json() as Promise<{ root: string }>) : null))
+      .then((body) => {
+        if (body?.root) setVaultRoot(body.root);
+      })
+      .catch(() => {
+        /* vaultRoot stays null; folderLabel falls back to the absolute dir */
+      });
+    return () => controller.abort();
+  }, []);
+
+  // Escape exits reading mode, guarded so it doesn't fight the AI popover or
+  // the in-place editor's own Escape handling.
+  useEffect(() => {
+    if (!reading || ai || editing) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setReadingMode(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [reading, ai, editing]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -264,6 +457,7 @@ export const WikiDetail = ({
   const startEdit = () => {
     if (!isText) return;
     setDraft(result.content);
+    setEditRaw(false);
     setEditing(true);
     setAi(null);
   };
@@ -354,6 +548,30 @@ export const WikiDetail = ({
             {saveError && (
               <span className="shrink-0 font-mono text-[10px] text-amber-400">{saveError}</span>
             )}
+            {markdown && (
+              <div className="flex h-7 shrink-0 items-center rounded-full border border-border p-0.5 font-sans text-[11px]">
+                <button
+                  type="button"
+                  className={cn(
+                    "rounded-full px-2.5 py-1 transition-colors",
+                    !editRaw ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setEditRaw(false)}
+                >
+                  Editor
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "rounded-full px-2.5 py-1 transition-colors",
+                    editRaw ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setEditRaw(true)}
+                >
+                  Markdown
+                </button>
+              </div>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -395,14 +613,52 @@ export const WikiDetail = ({
               </Button>
             )}
             {renderable && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 font-mono text-[11px]"
-                onClick={() => setShowSource((v) => !v)}
-              >
-                {showSource ? "rendered" : "source"}
-              </Button>
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Toggle reading mode"
+                  title="Toggle reading mode"
+                  onClick={toggleReadingMode}
+                  className={cn("text-muted-foreground hover:text-foreground", reading && "text-primary")}
+                >
+                  <BookOpen className="size-3.5" />
+                </Button>
+                {markdown && !reading && (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Toggle info panel"
+                    title="Toggle info panel"
+                    onClick={() => setInfoPanelOpen(!infoPanel)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    {infoPanel ? <PanelRightClose className="size-3.5" /> : <PanelRight className="size-3.5" />}
+                  </Button>
+                )}
+                <div className="flex h-7 shrink-0 items-center rounded-full border border-border p-0.5 font-sans text-[11px]">
+                  <button
+                    type="button"
+                    className={cn(
+                      "rounded-full px-2.5 py-1 transition-colors",
+                      !showSource ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setShowSource(false)}
+                  >
+                    Rendered
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "rounded-full px-2.5 py-1 transition-colors",
+                      showSource ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setShowSource(true)}
+                  >
+                    Source
+                  </button>
+                </div>
+              </>
             )}
           </>
         )}
@@ -420,6 +676,8 @@ export const WikiDetail = ({
           <div className="flex h-full items-center justify-center p-8">
             <Spinner className="size-4" aria-label="loading file" />
           </div>
+        ) : editing && markdown && !editRaw ? (
+          <WysiwygEditor value={draft} onChange={setDraft} />
         ) : editing && isText ? (
           <textarea
             value={draft}
@@ -440,10 +698,23 @@ export const WikiDetail = ({
           ) : markdown && !showSource ? (
             (() => {
               const { fields, body } = parseFrontmatter(result.content);
+              // The frontmatter title used to duplicate the body's H1 in a card
+              // stacked above it (B2). Now the H1 is the single title: if the
+              // body has none, promote the frontmatter title into one instead
+              // of dropping it. STATS still compute off the raw `body` below.
+              const hasH1 = /^#[^#]/.test(body.trimStart());
+              const titleField = fields.find((f) => f.key.toLowerCase() === "title")?.value;
+              const displayBody = !hasH1 && titleField ? `# ${titleField}\n\n${body}` : body;
               return (
-                <div className="mx-auto max-w-3xl px-6 py-5 font-mono text-xs">
-                  <FrontmatterCard fields={fields} />
-                  <Markdown>{body}</Markdown>
+                <div className="flex justify-center gap-12 px-6 py-10">
+                  <article className="wiki-prose mx-auto w-full max-w-[710px]">
+                    <Markdown sourcePath={activePath}>{displayBody}</Markdown>
+                  </article>
+                  {!reading && infoPanel && (
+                    <aside className="sticky top-10 hidden w-60 shrink-0 self-start border-l border-border pl-6 xl:block">
+                      <InfoPanel fields={fields} path={activePath} body={body} vaultRoot={vaultRoot} />
+                    </aside>
+                  )}
                 </div>
               );
             })()
@@ -472,7 +743,7 @@ export const WikiDetail = ({
               <button
                 key={entry.name}
                 type="button"
-                className="flex w-full items-center gap-2 px-4 py-1 text-left font-mono text-xs hover:bg-muted/40"
+                className="flex w-full items-center gap-2 border-l-2 border-transparent py-1 pl-[calc(1rem-2px)] pr-4 text-left font-mono text-xs hover:border-[var(--primary)] hover:bg-muted/40"
                 onClick={() => openWikiFile(`${result.path}/${entry.name}`)}
               >
                 {entry.isDirectory ? (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { SessionTile } from "@/components/session-tile";
+import { UsageQuota } from "@/components/usage-quota";
 import { fetchSessions, type DeckSession } from "@/lib/deck-session";
 
 const POLL_MS = 3000;
@@ -53,7 +54,9 @@ export const Grid = () => {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center justify-end gap-1 border-b border-border px-3">
+      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-border px-3">
+        <UsageQuota />
+        <div className="flex items-center gap-1">
         <span className="mr-1 font-mono text-[10px] tracking-wide text-muted-foreground/70">LAYOUT</span>
         {LAYOUTS.map((option) => (
           <button
@@ -70,6 +73,7 @@ export const Grid = () => {
             {option === "auto" ? "Auto" : option}
           </button>
         ))}
+        </div>
       </div>
 
       {sessions.length === 0 ? (
