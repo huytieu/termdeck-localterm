@@ -705,9 +705,15 @@ export const WikiDetail = ({
               const hasH1 = /^#[^#]/.test(body.trimStart());
               const titleField = fields.find((f) => f.key.toLowerCase() === "title")?.value;
               const displayBody = !hasH1 && titleField ? `# ${titleField}\n\n${body}` : body;
+              // mx-auto (not justify-center) centers the article+panel group when
+              // there's room but collapses margins to 0 on overflow, so the group
+              // pins to the left edge and stays fully scrollable — justify-center
+              // split the overflow to both sides and clipped the start of the text
+              // unreachably in the narrower drawer. The article shrinks (min-w-0)
+              // instead of forcing overflow, so the metadata panel can't clip it.
               return (
-                <div className="flex justify-center gap-12 px-6 py-10">
-                  <article className="wiki-prose mx-auto w-full max-w-[710px]">
+                <div className="mx-auto flex w-fit max-w-full gap-12 px-6 py-10">
+                  <article className="wiki-prose w-[710px] min-w-0 max-w-full">
                     <Markdown sourcePath={activePath}>{displayBody}</Markdown>
                   </article>
                   {!reading && infoPanel && (

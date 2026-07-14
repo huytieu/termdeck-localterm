@@ -21,3 +21,6 @@ packages/cli/terminal
 packages/cli/README.md
 packages/cli/LICENSE
 packages/server/src/pty-reader-addon/build/
+
+# agent visual-evidence scratch (never publish)
+apps/terminal/.evidence/

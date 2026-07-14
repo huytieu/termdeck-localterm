@@ -19,6 +19,27 @@ interface SessionsResponse {
   sessions: DeckSession[];
 }
 
+// Session activity → a minimal colored glyph, shared by the sidebar list and
+// the grid tile headers so both speak the same status language. `running` =
+// output flowing (working), `alive-quiet` = a foreground program is up but
+// quiet (waiting on you — review), `ready` = back at the shell prompt (done /
+// free). Solid ● = a live process; hollow ○ = idle. `color` is a Tailwind text
+// class; `pulse` marks the state that should breathe.
+export interface SessionStateMeta {
+  glyph: string;
+  color: string;
+  label: string;
+  pulse?: boolean;
+}
+
+const STATE_META: Record<string, SessionStateMeta> = {
+  running: { glyph: "●", color: "text-amber-500", label: "Running", pulse: true },
+  "alive-quiet": { glyph: "●", color: "text-[var(--primary)]", label: "Needs you" },
+  ready: { glyph: "○", color: "text-emerald-500", label: "Idle · done" },
+};
+
+export const sessionStateMeta = (state: string): SessionStateMeta => STATE_META[state] ?? STATE_META.ready;
+
 export const fetchSessions = async (signal?: AbortSignal): Promise<DeckSession[]> => {
   const response = await fetch("/api/sessions", { signal });
   if (!response.ok) throw new Error(`sessions: ${response.status}`);

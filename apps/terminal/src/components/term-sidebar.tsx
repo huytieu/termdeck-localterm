@@ -2,20 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { LayoutGrid, Plus, SquareTerminal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { createSession, fetchSessions, killSession, shortenCwd, type DeckSession } from "@/lib/deck-session";
+import { createSession, fetchSessions, killSession, sessionStateMeta, shortenCwd, type DeckSession } from "@/lib/deck-session";
 import { openGridAll, openSession } from "@/hooks/use-shell";
 
 const POLL_MS = 2500;
-
-// Session activity → a minimal colored glyph. `running` = output flowing
-// (working), `alive-quiet` = a foreground program is up but quiet (waiting on
-// you — review), `ready` = back at the shell prompt (done / free). Solid ● = a
-// live process; hollow ○ = idle.
-const STATE_META: Record<string, { glyph: string; color: string; label: string; pulse?: boolean }> = {
-  running: { glyph: "●", color: "text-amber-500", label: "Running", pulse: true },
-  "alive-quiet": { glyph: "●", color: "text-[var(--primary)]", label: "Needs you" },
-  ready: { glyph: "○", color: "text-emerald-500", label: "Idle · done" },
-};
 
 // Term-mode subnav: the session list plus New session and a "Grid all" entry
 // that shows every session as live tiles in the detail pane.
@@ -52,11 +42,20 @@ export const TermSidebar = ({ activeSid }: { activeSid: string | null }) => {
     }
   }, []);
 
-  const onKill = useCallback(async (id: string, title: string) => {
-    if (!window.confirm(`Kill "${title || "shell"}"?`)) return;
-    setSessions((prev) => prev.filter((x) => x.id !== id)); // optimistic
-    await killSession(id).catch(() => {});
-  }, []);
+  const onKill = useCallback(
+    async (id: string, title: string) => {
+      if (!window.confirm(`Kill "${title || "shell"}"?`)) return;
+      setSessions((prev) => prev.filter((x) => x.id !== id)); // optimistic
+      // Killing the session that's open in the detail view: leave to the grid
+      // FIRST, otherwise ?sid= still targets the now-dead PTY and the terminal
+      // drops into the "Shell ended" mask (you can't close a tab you didn't
+      // open by script). The grid close never hits this because it's never
+      // "inside" the killed session — match that behavior here.
+      if (id === activeSid) openGridAll();
+      await killSession(id).catch(() => {});
+    },
+    [activeSid],
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -90,7 +89,7 @@ export const TermSidebar = ({ activeSid }: { activeSid: string | null }) => {
 
       <div className="min-h-0 flex-1 overflow-auto py-1">
         {sessions.map((s) => {
-          const meta = STATE_META[s.state] ?? STATE_META.ready;
+          const meta = sessionStateMeta(s.state);
           return (
             <div key={s.id} className="group relative">
               <button

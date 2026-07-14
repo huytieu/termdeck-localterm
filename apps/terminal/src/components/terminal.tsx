@@ -806,6 +806,9 @@ export const Terminal = () => {
     let replayChunks: Uint8Array[] = [];
     let reconnectTimer: number | null = null;
     let resizeTimer: number | null = null;
+    // Retry state for a fit that can't measure yet (see fitToContainer).
+    let fitRetryTimer: number | null = null;
+    let fitRetries = 0;
     let faviconRunningTimer: number | null = null;
     let faviconReadyTimer: number | null = null;
     let lastOutputTimestamp = 0;
@@ -1537,7 +1540,30 @@ export const Terminal = () => {
       });
     };
 
+    // Converge an unmeasured fit within ~1.5s (30 × 50ms) then give up so a
+    // genuinely zero-sized (hidden/detached) tile never spins forever.
+    const FIT_RETRY_MS = 50;
+    const FIT_MAX_RETRIES = 30;
     const fitToContainer = () => {
+      // fit() silently no-ops when proposeDimensions can't measure the cell
+      // (font metrics not ready, or the tile's iframe was just laid out /
+      // is off-screen). It returns undefined, fit() does nothing, and the
+      // terminal stays at its default 80 cols — the grid tile then shows an
+      // empty box (tile wider than the stuck terminal) that only a refresh
+      // clears. Detect the unmeasured state and retry over the next frames so
+      // the tile converges to its settled size on its own.
+      if (!fitAddon.proposeDimensions?.()) {
+        if (fitRetries < FIT_MAX_RETRIES) {
+          fitRetries += 1;
+          if (fitRetryTimer !== null) window.clearTimeout(fitRetryTimer);
+          fitRetryTimer = window.setTimeout(() => {
+            fitRetryTimer = null;
+            fitToContainer();
+          }, FIT_RETRY_MS);
+        }
+        return;
+      }
+      fitRetries = 0;
       const resizeScrollAnchor = captureTerminalScrollAnchor(terminal);
       // Skip the resize ping when fit() bailed out (unmeasured container) — sending
       // the previous cols/rows would briefly desync the PTY until the next observer tick.
@@ -2176,6 +2202,7 @@ export const Terminal = () => {
       delete w[LOCALTERM_MOUSE_CELLS_PROPERTY];
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      if (fitRetryTimer !== null) window.clearTimeout(fitRetryTimer);
       clearResizeScrollRestore();
       resetFavicon();
       document.removeEventListener("visibilitychange", onVisibilityChange);

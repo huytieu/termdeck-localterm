@@ -1,5 +1,6 @@
 import { Maximize2, SquareTerminal, X } from "lucide-react";
-import { killSession, shortenCwd, type DeckSession } from "@/lib/deck-session";
+import { cn } from "@/lib/utils";
+import { killSession, sessionStateMeta, shortenCwd, type DeckSession } from "@/lib/deck-session";
 import { openSession } from "@/hooks/use-shell";
 
 // A grid tile = a LIVE, interactive terminal (iframe of the real terminal in
@@ -18,6 +19,8 @@ export const SessionTile = ({
     void killSession(session.id).then(() => onKilled(session.id));
   };
 
+  const meta = sessionStateMeta(session.state);
+
   return (
     <div
       onContextMenu={(event) => {
@@ -28,6 +31,13 @@ export const SessionTile = ({
     >
       <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
         <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
+          <span
+            aria-label={meta.label}
+            title={meta.label}
+            className={cn("w-2 shrink-0 text-center text-[10px] leading-none", meta.color, meta.pulse && "animate-pulse")}
+          >
+            {meta.glyph}
+          </span>
           <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground/70" />
           <span className="truncate">{session.title || session.shellName || "shell"}</span>
         </span>

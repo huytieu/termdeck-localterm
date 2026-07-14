@@ -2,6 +2,10 @@
 
 **Your terminal and your notes, in one browser tab.**
 
+<p align="center">
+  <img src="docs/media/demo.gif" alt="TermDeck — a terminal multiplexer and a Markdown wiki in one browser tab" width="860">
+</p>
+
 TermDeck is a browser-native workspace that fuses two things: a terminal multiplexer where **every tab is a shell**, and a **Markdown knowledge workspace** for reading and writing the notes those shells live next to. Run agents in the terminal on the left, read and edit the docs they touch on the right — same tab, same tool, reachable from any device on your tailnet.
 
 > **TermDeck is a fork of [localterm](https://github.com/monotykamary/localterm)** (MIT, by [@monotykamary](https://github.com/monotykamary)) — all of the terminal foundation is its work. The knowledge/wiki workspace is inspired by [anh-chu/wiki-viewer](https://github.com/anh-chu/wiki-viewer). See [Credits](#credits).
@@ -18,7 +22,7 @@ TermDeck is a browser-native workspace that fuses two things: a terminal multipl
 
 **TermDeck additions to the terminal:**
 
-- **At-a-glance session status.** A minimal colored glyph per session: `●` amber = running, `●` coral = needs your input, `○` green = idle/done — so you can scan which agent needs you.
+- **At-a-glance session status.** A minimal colored glyph per session: `●` amber = running, `●` coral = needs your input, `○` green = idle/done — so you can scan which agent needs you. The same glyph rides along on each **grid tile header**, so the live grid speaks the same status language as the sidebar.
 - **Hover-to-kill.** A small `✕` on each session row; no trip to the grid.
 - **Claude usage quota in the header.** Session (5h) and weekly limits with a bar, % remaining, and reset countdown — read from the same source your statusline uses.
 
@@ -26,7 +30,7 @@ TermDeck is a browser-native workspace that fuses two things: a terminal multipl
 
 - **Browse your vault** as a file tree with persistent expand/collapse, extension filters, hide-dotfiles, and full-text search.
 - **A reading surface, not a file dump.** Serif reading typography, a centered measure, a coral accent, and a right-hand info panel (Properties / Location / Stats — word count, blocks, reading time computed live). Toggle **reading mode** to hide all chrome.
-- **WYSIWYG editor**, Notion/Obsidian style — headings, lists, tasks, tables, code, links — with a faithful Markdown round-trip (frontmatter preserved verbatim, `[[wikilinks]]` intact). Flip to raw Markdown source anytime.
+- **WYSIWYG editor**, Notion/Obsidian style — headings, lists, tasks, tables, code, links — with a faithful Markdown round-trip (frontmatter preserved verbatim, `[[wikilinks]]` intact). Type **`/`** for a block-insert menu (headings, lists, quote, code block, table, divider) with keyboard nav, or use inline Markdown shortcuts. Flip to raw Markdown source anytime.
 - **New note** in a click (defaults to `.md`), `[[wikilinks]]`, inline color swatches for hex/rgb values, and syntax-highlighted code (light/dark).
 - Light and dark themes across the whole app, with one shared toggle.
 
@@ -51,6 +55,10 @@ The mental model is **shell = browser tab**; switch to Wiki mode from the left r
 
 ## Screens
 
+| Reading view | WYSIWYG + `/` menu | Live terminal grid |
+| --- | --- | --- |
+| ![Reading view](docs/media/still-reading.png) | ![Slash menu](docs/media/still-slash.png) | ![Terminal grid](docs/media/still-terminal.png) |
+
 A landing page with the full walkthrough lives in [`landing/index.html`](landing/index.html) — open it in any browser. It's self-contained (no build step, no external requests).
 
 ---
@@ -62,7 +70,7 @@ TermDeck stands on other people's work and says so:
 - **[localterm](https://github.com/monotykamary/localterm)** by [@monotykamary](https://github.com/monotykamary) — the entire terminal foundation (session model, daemon, tailnet serve, grid). TermDeck is a fork of it.
 - **[anh-chu/wiki-viewer](https://github.com/anh-chu/wiki-viewer)** — the inspiration for the in-app Markdown wiki workspace.
 
-TermDeck's own additions: the memo-style reading view, the WYSIWYG editor, the file-tree filters + persistence + new-file flow, session status glyphs, hover-kill, and the usage-quota header.
+TermDeck's own additions: the memo-style reading view, the WYSIWYG editor (with the `/` block-insert menu), the file-tree filters + persistence + new-file flow, session status glyphs (sidebar **and** grid tiles), hover-kill, and the usage-quota header.
 
 ## License
 
