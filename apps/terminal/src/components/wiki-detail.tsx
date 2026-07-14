@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -26,7 +28,12 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Markdown } from "@/components/markdown";
-import { WysiwygEditor } from "@/components/wysiwyg-editor";
+// The WYSIWYG editor pulls in the whole TipTap/ProseMirror tree (~hundreds of
+// KB) but is only mounted when the user clicks Edit on a markdown file. Load it
+// on demand so the default terminal/read views never pay for it up front.
+const WysiwygEditor = lazy(() =>
+  import("@/components/wysiwyg-editor").then((m) => ({ default: m.WysiwygEditor })),
+);
 import { openSession, openWikiFile } from "@/hooks/use-shell";
 import { createSession, chatAboutSelection } from "@/lib/deck-session";
 import {
@@ -775,7 +782,15 @@ export const WikiDetail = ({
             <Spinner className="size-4" aria-label="loading file" />
           </div>
         ) : editing && markdown && !editRaw ? (
-          <WysiwygEditor value={draft} onChange={setDraft} />
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center p-8">
+                <Spinner className="size-4" aria-label="loading editor" />
+              </div>
+            }
+          >
+            <WysiwygEditor value={draft} onChange={setDraft} />
+          </Suspense>
         ) : editing && isText ? (
           <textarea
             value={draft}

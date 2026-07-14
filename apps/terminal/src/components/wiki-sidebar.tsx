@@ -112,7 +112,7 @@ const TreeNode = ({
     () => false,
   );
   const [children, setChildren] = useState<Entry[] | null>(null);
-  const rowRef = useRef<HTMLButtonElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open || children !== null) return;
@@ -121,10 +121,11 @@ const TreeNode = ({
     return () => controller.abort();
   }, [open, children, root, path]);
 
-  // When this row is the file being viewed, pull it into view. Fires on mount
-  // (after its ancestors expand and it renders) so a file opened from chat lands
-  // visible even if it was scrolled off before.
-  const isActive = !isDirectory && path === activePath;
+  // When this row is the active location, pull it into view. Fires on mount
+  // (after ancestors expand and it renders) so a file/folder opened from chat or
+  // a breadcrumb lands visible even if it was scrolled off before. Folders count
+  // as active too, so a breadcrumb/tree folder click highlights its row here.
+  const isActive = path === activePath;
   useEffect(() => {
     if (isActive) rowRef.current?.scrollIntoView({ block: "nearest" });
   }, [isActive]);
@@ -138,31 +139,51 @@ const TreeNode = ({
   return (
     <div>
       {!hideRow && (
-        <button
+        // Row = a chevron toggle (folders only) + a main button. Clicking the
+        // main button opens the file OR the folder in the detail pane (a folder
+        // renders its listing, same as a breadcrumb click) and expands the
+        // folder so its children show; the chevron alone toggles collapse.
+        <div
           ref={rowRef}
-          type="button"
-          onClick={() => (isDirectory ? wikiTreeState.setOpen(path, !open) : openWikiFile(path))}
-          title={name}
           className={cn(
-            "flex w-full items-center gap-1 py-1 pr-2 text-left font-mono text-xs transition-colors",
+            "flex w-full items-center gap-1 py-1 pr-2 font-mono text-xs transition-colors",
             isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/40",
           )}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
           {isDirectory ? (
-            open ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground/70" />
-                 : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/70" />
+            <button
+              type="button"
+              aria-label={open ? "Collapse folder" : "Expand folder"}
+              className="shrink-0 rounded text-muted-foreground/70 hover:text-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                wikiTreeState.setOpen(path, !open);
+              }}
+            >
+              {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+            </button>
           ) : (
             <span className="w-3.5 shrink-0" />
           )}
-          {isDirectory ? (
-            open ? <FolderOpen className="size-3.5 shrink-0 text-muted-foreground/70" />
-                 : <Folder className="size-3.5 shrink-0 text-muted-foreground/70" />
-          ) : (
-            <File className="size-3.5 shrink-0 text-muted-foreground/50" />
-          )}
-          <span className="truncate">{name}</span>
-        </button>
+          <button
+            type="button"
+            title={name}
+            onClick={() => {
+              if (isDirectory) wikiTreeState.setOpen(path, true);
+              openWikiFile(path);
+            }}
+            className="flex min-w-0 flex-1 items-center gap-1 text-left"
+          >
+            {isDirectory ? (
+              open ? <FolderOpen className="size-3.5 shrink-0 text-muted-foreground/70" />
+                   : <Folder className="size-3.5 shrink-0 text-muted-foreground/70" />
+            ) : (
+              <File className="size-3.5 shrink-0 text-muted-foreground/50" />
+            )}
+            <span className="truncate">{name}</span>
+          </button>
+        </div>
       )}
       {isDirectory && open && children?.map((child) => (
         <TreeNode

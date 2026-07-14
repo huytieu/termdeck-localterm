@@ -1,6 +1,12 @@
+import { lazy, Suspense } from "react";
 import { BookText, Columns2, Maximize2, Minimize2, PanelRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { WikiDetail } from "@/components/wiki-detail";
+
+// Shared lazy chunk with shell.tsx: the file viewer stays out of the initial
+// bundle so opening the app to a terminal doesn't load the markdown/shiki stack.
+const WikiDetail = lazy(() =>
+  import("@/components/wiki-detail").then((m) => ({ default: m.WikiDetail })),
+);
 
 export type ArtifactMode = "layover" | "push";
 
@@ -72,7 +78,9 @@ export const ArtifactDrawer = ({
       </Button>
     </div>
     <div className="min-h-0 flex-1">
-      <WikiDetail key={path} path={path} line={line} sourceSid={sourceSid} />
+      <Suspense fallback={<div className="h-full bg-background" />}>
+        <WikiDetail key={path} path={path} line={line} sourceSid={sourceSid} />
+      </Suspense>
     </div>
   </div>
 );

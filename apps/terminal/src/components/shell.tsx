@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FileText } from "lucide-react";
 import {
   closeArtifact,
@@ -11,8 +11,15 @@ import { readingMode, subscribeReadingMode } from "@/lib/reading-mode";
 import { ActivityBar } from "@/components/activity-bar";
 import { TermSidebar } from "@/components/term-sidebar";
 import { WikiSidebar } from "@/components/wiki-sidebar";
-import { WikiDetail } from "@/components/wiki-detail";
 import { ArtifactDrawer, type ArtifactMode } from "@/components/artifact-drawer";
+
+// The file viewer (WikiDetail) drags in react-markdown + shiki (+ TipTap when
+// editing). The terminal is the default landing view and never needs any of it,
+// so load the viewer on demand — this is what keeps the first terminal paint
+// from parsing the whole markdown/highlighter stack.
+const WikiDetail = lazy(() =>
+  import("@/components/wiki-detail").then((m) => ({ default: m.WikiDetail })),
+);
 import { Grid } from "@/components/grid";
 import { Terminal } from "@/components/terminal";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -171,7 +178,9 @@ export const Shell = () => {
               <Grid />
             )
           ) : wikiPath ? (
-            <WikiDetail key={wikiPath} path={wikiPath} line={wikiLine} />
+            <Suspense fallback={<div className="h-full bg-background" />}>
+              <WikiDetail key={wikiPath} path={wikiPath} line={wikiLine} />
+            </Suspense>
           ) : (
             // B13: was generic monospace body text; now centered Public Sans
             // with a muted file glyph, matching the wiki's chrome type scale.

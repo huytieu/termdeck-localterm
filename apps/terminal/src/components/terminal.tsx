@@ -27,7 +27,7 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PR_DISPLAY_STATE_LABELS,
   PR_STATE_ICONS,
@@ -55,10 +55,20 @@ import {
 } from "@/components/ui/input-group";
 import { Spinner } from "@/components/ui/spinner";
 import { AutomationsButton } from "@/components/automations-menu";
-import { AutomationsModal } from "@/components/automations-modal";
+// A modal that renders markdown (react-markdown + shiki). Lazy so the shiki
+// highlighter stays out of the initial terminal bundle — it loads the first
+// time the user actually opens the modal, then stays resident.
+const AutomationsModal = lazy(() =>
+  import("@/components/automations-modal").then((m) => ({ default: m.AutomationsModal })),
+);
 import { CommandPalette, type CommandItem } from "@/components/command-palette";
 import { DiffViewer } from "@/components/diff-viewer";
-import { FilePreviewModal, type FilePreviewTarget } from "@/components/file-preview";
+import type { FilePreviewTarget } from "@/components/file-preview";
+// Same rationale as AutomationsModal: this modal renders markdown via shiki, so
+// defer it out of the initial bundle and load it on first open.
+const FilePreviewModal = lazy(() =>
+  import("@/components/file-preview").then((m) => ({ default: m.FilePreviewModal })),
+);
 import { KeepAwakeMenu, type CaffeinateMode } from "@/components/keep-awake-menu";
 import { PortsButton } from "@/components/ports-menu";
 import { PortsModal } from "@/components/ports-modal";
@@ -659,6 +669,17 @@ export const Terminal = () => {
   const [liveCwd, setLiveCwd] = useState<string | null>(null);
   const liveCwdRef = useRef<string | null>(null);
   const [filePreviewTarget, setFilePreviewTarget] = useState<FilePreviewTarget | null>(null);
+  // Latches for the two lazy, markdown-rendering modals: once opened they stay
+  // mounted so their close animation still runs and their chunk stays resident;
+  // until first opened they're never rendered, keeping shiki out of startup.
+  const [automationsEverOpened, setAutomationsEverOpened] = useState(false);
+  const [filePreviewEverOpened, setFilePreviewEverOpened] = useState(false);
+  useEffect(() => {
+    if (isAutomationsOpen) setAutomationsEverOpened(true);
+  }, [isAutomationsOpen]);
+  useEffect(() => {
+    if (filePreviewTarget !== null) setFilePreviewEverOpened(true);
+  }, [filePreviewTarget]);
   const wsConnectedRef = useRef(false);
   const isMac = useMemo(detectIsMacPlatform, []);
   // Keep-awake (caffeinate) is daemon-owned global state: the server is the
@@ -3329,29 +3350,37 @@ export const Terminal = () => {
         onDiffSummaryUpdate={setGitDiffSummary}
       />
 
-      <FilePreviewModal
-        open={filePreviewTarget !== null}
-        cwd={liveCwd}
-        target={filePreviewTarget}
-        onClose={() => setFilePreviewTarget(null)}
-        onOpenInEditor={(filePath, lineNumber) => {
-          if (!liveCwd) return;
-          setFilePreviewTarget(null);
-          openShellAt(
-            liveCwd,
-            `nvim ${lineNumber != null ? `+${lineNumber} ` : ""}${shellQuoteArg(filePath)} && exit`,
-          );
-        }}
-      />
+      {filePreviewEverOpened && (
+        <Suspense fallback={null}>
+          <FilePreviewModal
+            open={filePreviewTarget !== null}
+            cwd={liveCwd}
+            target={filePreviewTarget}
+            onClose={() => setFilePreviewTarget(null)}
+            onOpenInEditor={(filePath, lineNumber) => {
+              if (!liveCwd) return;
+              setFilePreviewTarget(null);
+              openShellAt(
+                liveCwd,
+                `nvim ${lineNumber != null ? `+${lineNumber} ` : ""}${shellQuoteArg(filePath)} && exit`,
+              );
+            }}
+          />
+        </Suspense>
+      )}
 
-      <AutomationsModal
-        open={isAutomationsOpen}
-        onClose={() => handleAutomationsOpenChange(false)}
-        automations={automations}
-        onAutomationsLoaded={setAutomations}
-        defaultCwd={liveCwd}
-        isMac={isMac}
-      />
+      {automationsEverOpened && (
+        <Suspense fallback={null}>
+          <AutomationsModal
+            open={isAutomationsOpen}
+            onClose={() => handleAutomationsOpenChange(false)}
+            automations={automations}
+            onAutomationsLoaded={setAutomations}
+            defaultCwd={liveCwd}
+            isMac={isMac}
+          />
+        </Suspense>
+      )}
 
       <WorktreesModal
         open={isWorktreesOpen}
