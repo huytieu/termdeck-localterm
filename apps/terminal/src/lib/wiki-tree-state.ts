@@ -43,4 +43,19 @@ export const wikiTreeState = {
     persist();
     listeners.forEach((l) => l());
   },
+  // Expand many folders at once (e.g. every ancestor of a file opened from chat),
+  // persisting and notifying a single time so the tree reveals the target in one
+  // render pass instead of a flicker per level.
+  openPaths(paths: string[]): void {
+    let changed = false;
+    for (const path of paths) {
+      if (!expanded.has(path)) {
+        expanded.add(path);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    persist();
+    listeners.forEach((l) => l());
+  },
 };

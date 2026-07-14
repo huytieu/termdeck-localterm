@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -112,6 +112,7 @@ const TreeNode = ({
     () => false,
   );
   const [children, setChildren] = useState<Entry[] | null>(null);
+  const rowRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open || children !== null) return;
@@ -120,18 +121,25 @@ const TreeNode = ({
     return () => controller.abort();
   }, [open, children, root, path]);
 
+  // When this row is the file being viewed, pull it into view. Fires on mount
+  // (after its ancestors expand and it renders) so a file opened from chat lands
+  // visible even if it was scrolled off before.
+  const isActive = !isDirectory && path === activePath;
+  useEffect(() => {
+    if (isActive) rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [isActive]);
+
   // Filtering. Dotfiles hidden as a unit; files gated by ext/pattern; folders
   // stay visible so you can drill in (unless "files only" hides folder rows).
   if (filter.hideDotfiles && name.startsWith(".")) return null;
   if (!isDirectory && !fileMatches(name, filter)) return null;
   const hideRow = isDirectory && filter.filesOnly;
 
-  const isActive = !isDirectory && path === activePath;
-
   return (
     <div>
       {!hideRow && (
         <button
+          ref={rowRef}
           type="button"
           onClick={() => (isDirectory ? wikiTreeState.setOpen(path, !open) : openWikiFile(path))}
           title={name}
@@ -285,6 +293,24 @@ export const WikiSidebar = ({ activePath }: { activePath: string | null }) => {
     void fetchDir(root, root, controller.signal).then(setEntries).catch(() => setEntries([]));
     return () => controller.abort();
   }, [root]);
+
+  // Reveal the active file: expand every ancestor folder between the vault root
+  // and the file so the highlighted row is actually rendered (and thus visible +
+  // scrolled into view by TreeNode). This is what makes "open from chat" land on
+  // a file deep in a collapsed tree and show where it lives. Each open folder
+  // lazily loads its children, cascading the expansion down to the target.
+  useEffect(() => {
+    if (!root || !activePath || !activePath.startsWith(`${root}/`)) return;
+    const segments = activePath.slice(root.length + 1).split("/");
+    const ancestors: string[] = [];
+    let cursor = root;
+    // Stop before the last segment (the file itself is not a folder to open).
+    for (let i = 0; i < segments.length - 1; i++) {
+      cursor = `${cursor}/${segments[i]}`;
+      ancestors.push(cursor);
+    }
+    if (ancestors.length > 0) wikiTreeState.openPaths(ancestors);
+  }, [root, activePath]);
 
   const rootName = root ? root.split("/").filter(Boolean).slice(-1)[0] ?? "/" : "";
 

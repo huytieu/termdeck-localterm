@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   BookOpen,
+  ChevronRight,
   File,
   FileText,
   Folder,
@@ -483,6 +484,29 @@ export const WikiDetail = ({
   // doc, not a file on disk), so edit/save is suppressed for it.
   const isGithub = isGithubArtifactPath(path);
   const basename = activePath.slice(activePath.lastIndexOf("/") + 1);
+
+  // Breadcrumb: the trail from the vault root down to this file, so you can see
+  // where the file lives and click a folder to jump there. Each crumb carries
+  // the absolute path it opens; the last (the file) is the current location and
+  // isn't a link. Only meaningful for real on-disk files under the vault.
+  const crumbs = useMemo(() => {
+    if (isGithub || !activePath.startsWith("/")) return [];
+    const underVault = vaultRoot && activePath.startsWith(`${vaultRoot}/`);
+    const base = underVault ? vaultRoot : "";
+    const rootLabel = underVault
+      ? vaultRoot.split("/").filter(Boolean).slice(-1)[0] ?? "/"
+      : "";
+    const rel = activePath.slice(base.length).replace(/^\/+/, "");
+    const segments = rel.split("/").filter(Boolean);
+    const trail: { label: string; path: string; isDir: boolean }[] = [];
+    if (rootLabel) trail.push({ label: rootLabel, path: base, isDir: true });
+    let cursor = base;
+    segments.forEach((seg, i) => {
+      cursor = `${cursor}/${seg}`;
+      trail.push({ label: seg, path: cursor, isDir: i < segments.length - 1 });
+    });
+    return trail;
+  }, [activePath, vaultRoot, isGithub]);
   const isText = result?.kind === "text";
   const markdown = isText && isMarkdownPath(result.path);
   const html = isText && isHtmlPath(result.path);
@@ -712,6 +736,31 @@ export const WikiDetail = ({
           </>
         )}
       </div>
+
+      {!reading && crumbs.length > 0 && (
+        <nav
+          aria-label="Breadcrumb"
+          className="flex h-7 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/60 px-4 font-mono text-[11px] text-muted-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {crumbs.map((crumb, i) => (
+            <span key={crumb.path} className="flex shrink-0 items-center gap-0.5">
+              {i > 0 && <ChevronRight className="size-3 shrink-0 text-muted-foreground/40" />}
+              {crumb.isDir ? (
+                <button
+                  type="button"
+                  title={crumb.path}
+                  onClick={() => openWikiFile(crumb.path)}
+                  className="rounded px-1 py-0.5 transition-colors hover:bg-accent/60 hover:text-foreground"
+                >
+                  {crumb.label}
+                </button>
+              ) : (
+                <span className="px-1 py-0.5 text-foreground">{crumb.label}</span>
+              )}
+            </span>
+          ))}
+        </nav>
+      )}
 
       <div
         className="min-h-0 flex-1 overflow-auto"
