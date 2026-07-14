@@ -454,25 +454,43 @@ export const WikiDetail = ({
         }
         return;
       }
-      // A `..`/`...` segment (or a non-absolute path) means the anchor is wrong;
-      // locate the real file by its tail before rendering.
-      const needsLocate = /(^|\/)(\.\.|\.\.\.)(\/|$)/.test(path) || !path.startsWith("/");
-      let target = path;
-      if (needsLocate) {
-        const relMatch = path.match(/.*\/(?:\.\.|\.\.\.)\/(.+)$/);
-        const rel = relMatch ? relMatch[1] : path;
-        try {
-          const res = await fetch(`/api/wiki/locate?rel=${encodeURIComponent(rel)}`, {
-            signal: controller.signal,
-          });
-          const body = (await res.json()) as { path: string | null };
-          if (body.path) {
-            target = body.path;
-            if (!controller.signal.aborted) setResolvedPath(body.path);
-          }
-        } catch {
-          /* locate failed; fall through and try the raw path */
+      // Fast path: fetch the path exactly as given. The daemon resolves `~` and
+      // cwd-relative paths itself (statting a single file), so absolute vault
+      // paths AND the `~/vault/…` paths that terminal clicks produce both render
+      // in a couple of ms. Only when this genuinely fails do we fall back to the
+      // vault-wide `locate` below — which shells out to `find` over the whole
+      // (iCloud-backed) tree and can take ~20s, so it must never be the default.
+      try {
+        const direct = await fetchText(path);
+        if (controller.signal.aborted) return;
+        if (direct && !("error" in direct)) {
+          // The response carries the resolved absolute path; adopt it so the
+          // breadcrumb, tree highlight, and file ops work off a real path.
+          if (direct.path && direct.path !== path) setResolvedPath(direct.path);
+          setResult(direct);
+          return;
         }
+      } catch {
+        if (controller.signal.aborted) return;
+        /* transient failure — fall through to locate as a last resort */
+      }
+      // Fallback: a `..`/`...`-truncated or otherwise unanchored path. Locate the
+      // real file by its tail across the vault, then render whatever that finds.
+      const relMatch = path.match(/.*\/(?:\.\.|\.\.\.)\/(.+)$/);
+      const rel = relMatch ? relMatch[1] : path;
+      let target = path;
+      try {
+        const res = await fetch(`/api/wiki/locate?rel=${encodeURIComponent(rel)}`, {
+          signal: controller.signal,
+        });
+        const body = (await res.json()) as { path: string | null };
+        if (body.path) {
+          target = body.path;
+          if (!controller.signal.aborted) setResolvedPath(body.path);
+        }
+      } catch {
+        if (controller.signal.aborted) return;
+        /* locate failed; fall through and try the raw path */
       }
       try {
         const body = await fetchText(target);
