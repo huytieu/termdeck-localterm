@@ -12,6 +12,7 @@ import { AutomationScheduler } from "./automation-scheduler.js";
 import { AutomationStore } from "./automation-store.js";
 import { runAgent, compactAgent, listAgentModels, readAgentSession } from "./agent-runner.js";
 import { listAgentSkills } from "./agent-skills.js";
+import { parseGithubRef, fetchGithubMarkdown } from "./github-issue.js";
 import type { BatteryProbe } from "./caffeinate-battery.js";
 import { CaffeinateController } from "./caffeinate-controller.js";
 import { CaffeinateManager } from "./caffeinate-manager.js";
@@ -1907,6 +1908,26 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
       return at - bt || a.length - b.length;
     });
     return context.json({ path: candidates[0] });
+  });
+
+  // Render a GitHub issue/PR as markdown for the artifact drawer. The real page
+  // can't be iframed (x-frame-options: deny), so we fetch it through the authed
+  // `gh` CLI instead and hand back markdown the wiki renderer already knows.
+  api.get("/github", async (context) => {
+    const url = (context.req.query("url") ?? "").trim();
+    if (!parseGithubRef(url)) {
+      return context.json({ error: "Not a GitHub issue or pull-request URL." }, 400);
+    }
+    try {
+      const result = await fetchGithubMarkdown(url);
+      if (!result) return context.json({ error: "Not a GitHub issue or pull-request URL." }, 400);
+      return context.json({ ok: true, ...result });
+    } catch (error) {
+      return context.json(
+        { error: error instanceof Error ? error.message : String(error) },
+        502,
+      );
+    }
   });
 
   // Resolve a worktree path (create target / remove target). Relative paths are

@@ -72,6 +72,7 @@ import { SettingsMenu } from "@/components/settings-menu";
 import { WorktreesButton } from "@/components/worktrees-menu";
 import { WorktreesModal } from "@/components/worktrees-modal";
 import { openFileInWiki, isEmbedded } from "@/hooks/use-shell";
+import { isGithubIssueOrPrUrl } from "@/utils/github-link";
 import { useGitBranchInfo } from "@/hooks/use-git-branch-info";
 import { useGitDiffSummary } from "@/hooks/use-git-diff-summary";
 import { useScreenWakeLock } from "@/hooks/use-screen-wake-lock";
@@ -925,7 +926,18 @@ export const Terminal = () => {
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
     terminal.loadAddon(fitAddon);
-    terminal.loadAddon(new WebLinksAddon());
+    // Real URLs open in a new tab — EXCEPT GitHub issue/PR links, which open in
+    // the artifact drawer (fetched + rendered as markdown, with select-to-chat)
+    // instead, linked to THIS session so "chat about this" can route back.
+    terminal.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        if (isGithubIssueOrPrUrl(uri)) {
+          openFileInWiki(uri, undefined, liveSessionIdRef.current);
+          return;
+        }
+        window.open(uri, "_blank", "noopener,noreferrer");
+      }),
+    );
     terminal.loadAddon(new ClipboardAddon());
     terminal.loadAddon(new ImageAddon());
     terminal.loadAddon(new ProgressAddon());

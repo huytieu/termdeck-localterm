@@ -47,6 +47,7 @@ import {
   type FilePreviewContent,
   type FileTextResponse,
 } from "@/components/file-preview";
+import { isGithubArtifactPath, githubVirtualName } from "@/utils/github-link";
 
 const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p);
 const isCsvPath = (p: string): boolean => /\.(csv|tsv)$/i.test(p);
@@ -413,6 +414,35 @@ export const WikiDetail = ({
     };
 
     const load = async () => {
+      // A GitHub issue/PR URL isn't a file — the real page can't be iframed, so
+      // fetch it through the daemon's `gh`-backed endpoint and render the
+      // returned markdown as a virtual .md file (markdown pipeline + select-to-
+      // chat work unchanged; edit/save is disabled for it below).
+      if (isGithubArtifactPath(path)) {
+        try {
+          const res = await fetch(`/api/github?url=${encodeURIComponent(path)}`, {
+            signal: controller.signal,
+          });
+          const body = (await res.json()) as { ok?: boolean; markdown?: string; error?: string };
+          if (controller.signal.aborted) return;
+          if (!res.ok || !body.ok || typeof body.markdown !== "string") {
+            setError(body.error ?? "Couldn't load the GitHub issue.");
+            return;
+          }
+          setResult({
+            kind: "text",
+            path: githubVirtualName(path),
+            size: body.markdown.length,
+            truncated: false,
+            content: body.markdown,
+          });
+        } catch {
+          if (!controller.signal.aborted) {
+            setError("Couldn't reach the daemon to load the GitHub issue.");
+          }
+        }
+        return;
+      }
       // A `..`/`...` segment (or a non-absolute path) means the anchor is wrong;
       // locate the real file by its tail before rendering.
       const needsLocate = /(^|\/)(\.\.|\.\.\.)(\/|$)/.test(path) || !path.startsWith("/");
@@ -446,6 +476,9 @@ export const WikiDetail = ({
     return () => controller.abort();
   }, [path, line, reloadTick]);
 
+  // A GitHub issue/PR rendered in the drawer is read-only (a virtual markdown
+  // doc, not a file on disk), so edit/save is suppressed for it.
+  const isGithub = isGithubArtifactPath(path);
   const basename = activePath.slice(activePath.lastIndexOf("/") + 1);
   const isText = result?.kind === "text";
   const markdown = isText && isMarkdownPath(result.path);
@@ -455,7 +488,7 @@ export const WikiDetail = ({
   const renderable = markdown || html || csv;
 
   const startEdit = () => {
-    if (!isText) return;
+    if (!isText || isGithub) return;
     setDraft(result.content);
     setEditRaw(false);
     setEditing(true);
@@ -592,16 +625,18 @@ export const WikiDetail = ({
           </>
         ) : (
           <>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="open terminal here"
-              title="Open a terminal in this file's folder"
-              onClick={openTerminalHere}
-            >
-              <SquareTerminal className="size-3.5" />
-            </Button>
-            {isText && (
+            {!isGithub && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="open terminal here"
+                title="Open a terminal in this file's folder"
+                onClick={openTerminalHere}
+              >
+                <SquareTerminal className="size-3.5" />
+              </Button>
+            )}
+            {isText && !isGithub && (
               <Button
                 variant="ghost"
                 size="icon-sm"
