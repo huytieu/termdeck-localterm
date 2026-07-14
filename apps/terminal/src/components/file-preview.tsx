@@ -10,6 +10,7 @@ import {
 } from "@/lib/animation-classes";
 import { cn } from "@/lib/utils";
 import { Markdown } from "@/components/markdown";
+import { buildMediaUrl } from "@/utils/build-media-url";
 import {
   detectLangId,
   tokenizeDiffLines,
@@ -29,6 +30,7 @@ interface DirectoryEntry {
 export type FilePreviewContent =
   | { kind: "text"; path: string; size: number; truncated: boolean; content: string }
   | { kind: "image"; path: string; size: number; dataUrl: string }
+  | { kind: "video"; path: string; size: number }
   | { kind: "binary"; path: string; size: number }
   | { kind: "directory"; path: string; entries: DirectoryEntry[]; truncated: boolean };
 
@@ -43,6 +45,9 @@ interface FilePreviewModalProps {
 }
 
 export const isMarkdownPath = (filePath: string): boolean => /\.(md|mdx|markdown)$/i.test(filePath);
+
+export const isVideoPath = (filePath: string): boolean =>
+  /\.(mp4|m4v|webm|ogv|ogg|mov)$/i.test(filePath);
 
 export const formatSize = (size: number): string => {
   if (size < 1024) return `${size} B`;
@@ -340,6 +345,15 @@ export const FilePreviewModal = ({
                 src={result.dataUrl}
                 alt={basename}
                 className="max-h-full max-w-full rounded border border-border/40 object-contain"
+              />
+            </div>
+          ) : result.kind === "video" ? (
+            <div className="flex h-full items-center justify-center p-6">
+              <video
+                src={cwd ? buildMediaUrl(cwd, result.path) : undefined}
+                controls
+                playsInline
+                className="max-h-full max-w-full rounded border border-border/40 bg-black object-contain"
               />
             </div>
           ) : result.kind === "binary" ? (

@@ -183,6 +183,8 @@ import { getBufferedAmount, type ClientSocket } from "./utils/ws-socket.js";
 import { resolveStaticAsset } from "./static-resolver.js";
 import { resolveImageAsset } from "./utils/resolve-image-asset.js";
 import { imageContentTypeFor } from "./utils/image-extensions.js";
+import { videoContentTypeFor } from "./utils/video-extensions.js";
+import { Readable } from "node:stream";
 import { sweepStaleWorktrees } from "./utils/worktree-sweep.js";
 import {
   readWorktreeIncludeFile,
@@ -1560,6 +1562,13 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
       }
     }
 
+    // Video: don't inline the bytes (base64 would bloat the JSON and kill
+    // seeking) — signal the kind and let the client stream it from /api/media,
+    // which supports HTTP range requests.
+    if (videoContentTypeFor(filePath)) {
+      return context.json({ kind: "video", path: filePath, size: stats.size });
+    }
+
     let handle: number;
     try {
       handle = fs.openSync(filePath, "r");
@@ -1585,6 +1594,67 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     } finally {
       fs.closeSync(handle);
     }
+  });
+
+  // Streams a video file for inline <video> playback (side panel + wiki). Unlike
+  // /file/text (which base64-inlines images), this serves raw bytes with HTTP
+  // range support so the player can seek without loading the whole file. Gated
+  // to known video content types — a text/HTML file can never be served here, so
+  // it can't XSS the app origin the way an arbitrary same-origin file would.
+  api.get("/media", (context) => {
+    const cwd = resolveCwdQuery(context.req.query("cwd"));
+    if (!cwd) return context.json({ error: "invalid_cwd" }, HTTP_STATUS_BAD_REQUEST);
+    const filePath = resolveFileTextPath(cwd, context.req.query("path"));
+    if (!filePath) return context.json({ error: "invalid_path" }, HTTP_STATUS_BAD_REQUEST);
+    const contentType = videoContentTypeFor(filePath);
+    if (!contentType) return context.json({ error: "invalid_path" }, HTTP_STATUS_BAD_REQUEST);
+
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(filePath);
+    } catch {
+      return context.text("not found", HTTP_STATUS_NOT_FOUND);
+    }
+    if (!stats.isFile()) return context.text("not found", HTTP_STATUS_NOT_FOUND);
+
+    const size = stats.size;
+    const headers: Record<string, string> = {
+      "content-type": contentType,
+      "content-disposition": "inline",
+      "accept-ranges": "bytes",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    };
+    const toWeb = (start?: number, end?: number): ReadableStream<Uint8Array> =>
+      Readable.toWeb(
+        fs.createReadStream(filePath, start !== undefined ? { start, end } : undefined),
+      ) as unknown as ReadableStream<Uint8Array>;
+
+    const rangeMatch = /^bytes=(\d*)-(\d*)$/.exec((context.req.header("range") ?? "").trim());
+    if (rangeMatch) {
+      let start = rangeMatch[1] ? parseInt(rangeMatch[1], 10) : 0;
+      let end = rangeMatch[2] ? parseInt(rangeMatch[2], 10) : size - 1;
+      if (Number.isNaN(start)) start = 0;
+      if (Number.isNaN(end) || end >= size) end = size - 1;
+      if (start > end || start >= size) {
+        return new Response(null, {
+          status: 416,
+          headers: { ...headers, "content-range": `bytes */${size}` },
+        });
+      }
+      return new Response(toWeb(start, end), {
+        status: 206,
+        headers: {
+          ...headers,
+          "content-range": `bytes ${start}-${end}/${size}`,
+          "content-length": String(end - start + 1),
+        },
+      });
+    }
+    return new Response(toWeb(), {
+      status: 200,
+      headers: { ...headers, "content-length": String(size) },
+    });
   });
 
   const readJsonBody = async (context: { req: { json: () => Promise<unknown> } }) => {

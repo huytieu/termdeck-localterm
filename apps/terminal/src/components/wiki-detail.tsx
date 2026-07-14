@@ -48,6 +48,7 @@ import {
   type FileTextResponse,
 } from "@/components/file-preview";
 import { isGithubArtifactPath, githubVirtualName } from "@/utils/github-link";
+import { buildMediaUrl } from "@/utils/build-media-url";
 
 const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p);
 const isCsvPath = (p: string): boolean => /\.(csv|tsv)$/i.test(p);
@@ -772,6 +773,15 @@ export const WikiDetail = ({
               src={result.dataUrl}
               alt={basename}
               className="max-h-full max-w-full rounded border border-border/40 object-contain"
+            />
+          </div>
+        ) : result.kind === "video" ? (
+          <div className="flex h-full items-center justify-center p-6">
+            <video
+              src={buildMediaUrl(dirOf(activePath), result.path)}
+              controls
+              playsInline
+              className="max-h-full max-w-full rounded border border-border/40 bg-black object-contain"
             />
           </div>
         ) : result.kind === "binary" ? (
