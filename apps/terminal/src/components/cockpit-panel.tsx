@@ -33,9 +33,11 @@ export const CockpitPanel = ({ cwd }: { cwd: string | null }) => {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
+  const sidRef = useRef(sid);
+  sidRef.current = sid;
 
   const refresh = useCallback((signal?: AbortSignal) => {
-    fetchCockpit(cwdRef.current, signal).then((next) => {
+    fetchCockpit(cwdRef.current, sidRef.current, signal).then((next) => {
       if (!signal?.aborted) setData(next);
     });
   }, []);
@@ -45,6 +47,9 @@ export const CockpitPanel = ({ cwd }: { cwd: string | null }) => {
       setData({ found: false });
       return;
     }
+    // Clear any prior session's cockpit before refetching so a switch never
+    // flashes the old doc while the new fetch is in flight.
+    setData({ found: false });
     const controller = new AbortController();
     refresh(controller.signal);
     const timer = window.setInterval(() => refresh(), POLL_MS);
@@ -55,7 +60,7 @@ export const CockpitPanel = ({ cwd }: { cwd: string | null }) => {
       window.clearInterval(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [cwd, refresh]);
+  }, [cwd, sid, refresh]);
 
   const toggleCollapsed = () =>
     setCollapsed((prev) => {

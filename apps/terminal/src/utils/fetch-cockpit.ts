@@ -28,12 +28,17 @@ const COCKPIT_ENDPOINT = "/api/cockpit";
 
 export const fetchCockpit = async (
   cwd: string | null | undefined,
+  sid?: string | null,
   signal?: AbortSignal,
 ): Promise<CockpitData> => {
   if (!cwd) return { found: false };
   try {
     const url = new URL(COCKPIT_ENDPOINT, window.location.href);
     url.searchParams.set("cwd", cwd);
+    // The session id lets the server scope the cockpit to THIS session: only a
+    // doc modified during the session's lifetime is "tied" to it, so a fresh
+    // terminal never inherits a previous session's cockpit doc.
+    if (sid) url.searchParams.set("sid", sid);
     const response = await fetch(url.toString(), { signal });
     if (!response.ok) return { found: false };
     return (await response.json()) as CockpitData;

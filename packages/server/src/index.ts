@@ -1821,6 +1821,20 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     const cwd = resolveCwdQuery(context.req.query("cwd"));
     if (!cwd) return context.json({ found: false });
 
+    // Scope the cockpit to THIS session. The recursive marker search would
+    // otherwise surface the newest cockpit doc anywhere under the cwd (e.g. the
+    // whole vault when the terminal sits at its root), so a freshly-opened
+    // session would inherit a *previous* session's review doc. A doc is "tied
+    // to" the session only if it was modified during the session's lifetime, so
+    // we drop any candidate older than the session's createdAt. When the session
+    // can't be resolved (no sid / daemon restarted the PTY), fall back to the
+    // unscoped newest-doc behavior rather than hiding a legit cockpit.
+    const sid = context.req.query("sid");
+    const session = sid
+      ? registry.list(ownerFor(context)).find((item) => item.id === sid)
+      : undefined;
+    const sessionSince = session?.createdAt ?? null;
+
     const runFind = (cmd: string, args: string[]): Promise<{ code: number; out: string }> =>
       new Promise((resolve) => {
         let child: ReturnType<typeof spawn>;
@@ -1903,7 +1917,10 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
         }
       })
       .filter((x): x is { file: string; mtime: number; size: number } => x !== null)
+      // Only keep docs touched during this session's lifetime (see above).
+      .filter((x) => sessionSince === null || x.mtime >= sessionSince)
       .sort((a, b) => b.mtime - a.mtime);
+    if (ranked.length === 0) return context.json({ found: false });
 
     const readCockpitText = (file: string, size: number): string | null => {
       try {
