@@ -1717,6 +1717,226 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     return context.json({ ok: true, path: filePath, size: Buffer.byteLength(content, "utf8") });
   });
 
+  // TermDeck session cockpit: surface the review-cockpit doc (Progress / Working
+  // folder / Context) for the session's cwd in the terminal top-right, so an
+  // agent-driven session shows its live plan without leaving the terminal. Finds
+  // the newest markdown file under the cwd carrying the cockpit marker heading,
+  // parses its three sections, returns structured JSON. Read-only.
+  const COCKPIT_MARKER = "## \u{1F9ED} Progress"; // the section heading "## 🧭 Progress", not a prose mention
+  const COCKPIT_MAX_BYTES = 256 * 1024;
+  const COCKPIT_FIND_TIMEOUT_MS = 4000;
+  const COCKPIT_IGNORE_DIRS = [".git", "node_modules", ".obsidian", "dist", "build", ".next", ".venv"];
+
+  // Strip inline markdown links to their label: [txt](url) -> txt.
+  const stripMdLinks = (s: string): string => s.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+
+  const parseCockpit = (text: string): {
+    title: string | null;
+    status: string | null;
+    updated: string | null;
+    progress: { done: boolean; text: string; anchor: string | null }[];
+    working: { label: string; target: string | null }[];
+    context: string[];
+  } => {
+    const lines = text.split(/\r?\n/);
+    let title: string | null = null;
+    let updated: string | null = null;
+    let status: string | null = null;
+
+    // Frontmatter (leading --- ... ---): pull title/updated.
+    let body = lines;
+    if (lines[0]?.trim() === "---") {
+      const end = lines.indexOf("---", 1);
+      if (end > 0) {
+        for (const fm of lines.slice(1, end)) {
+          const m = /^(title|updated):\s*(.+)$/.exec(fm.trim());
+          if (m) {
+            if (m[1] === "title") title = m[2].trim();
+            else updated = m[2].trim();
+          }
+        }
+        body = lines.slice(end + 1);
+      }
+    }
+
+    // Section bucketing by "## " headings; match loosely on heading text.
+    let section: "progress" | "working" | "context" | null = null;
+    const progress: { done: boolean; text: string; anchor: string | null }[] = [];
+    const working: { label: string; target: string | null }[] = [];
+    const context: string[] = [];
+    for (const raw of body) {
+      const line = raw.trimEnd();
+      if (!title && /^#\s+/.test(line)) title = line.replace(/^#\s+/, "").trim();
+      if (!status && /^>\s*\*\*Status/i.test(line)) {
+        status = stripMdLinks(line.replace(/^>\s*/, "").replace(/\*\*/g, "").trim());
+        const upd = /Updated:\s*(.+)$/i.exec(status);
+        if (upd && !updated) updated = upd[1].trim();
+        continue;
+      }
+      if (/^##\s+/.test(line)) {
+        const h = line.replace(/^##\s+/, "").toLowerCase();
+        section = h.includes("progress")
+          ? "progress"
+          : h.includes("working folder")
+            ? "working"
+            : h.includes("context")
+              ? "context"
+              : null;
+        continue;
+      }
+      if (section === "progress") {
+        const m = /^-\s*\[([ xX])\]\s*(.+)$/.exec(line.trim());
+        if (m) {
+          const done = m[1].toLowerCase() === "x";
+          const anchorMatch = /\]\(#([^)]+)\)/.exec(m[2]);
+          progress.push({
+            done,
+            text: stripMdLinks(m[2]).trim(),
+            anchor: anchorMatch ? anchorMatch[1] : null,
+          });
+        }
+      } else if (section === "working") {
+        // Markdown table rows: | label | target |. Skip header + separator.
+        const cells = line.trim();
+        if (!cells.startsWith("|")) continue;
+        const cols = cells.split("|").slice(1, -1).map((c) => c.trim());
+        if (cols.length < 2) continue;
+        if (/^-+$/.test(cols[0].replace(/[:\s]/g, "-")) || /^artifact$/i.test(cols[0])) continue;
+        // target: a markdown link URL if present, else a backticked path.
+        const linkUrl = /\]\(([^)]+)\)/.exec(cols[1]);
+        const backtick = /`([^`]+)`/.exec(cols[1]);
+        working.push({
+          label: stripMdLinks(cols[0]).replace(/`/g, "").trim(),
+          target: linkUrl ? linkUrl[1] : backtick ? backtick[1] : null,
+        });
+      } else if (section === "context") {
+        const m = /^-\s+(.+)$/.exec(line.trim());
+        if (m) context.push(stripMdLinks(m[1]).replace(/\*\*/g, "").trim());
+      }
+    }
+    return { title, status, updated, progress, working, context };
+  };
+
+  api.get("/cockpit", async (context) => {
+    const cwd = resolveCwdQuery(context.req.query("cwd"));
+    if (!cwd) return context.json({ found: false });
+
+    const runFind = (cmd: string, args: string[]): Promise<{ code: number; out: string }> =>
+      new Promise((resolve) => {
+        let child: ReturnType<typeof spawn>;
+        try {
+          child = spawn(cmd, args, { cwd });
+        } catch {
+          resolve({ code: -1, out: "" });
+          return;
+        }
+        let out = "";
+        let settled = false;
+        const finish = (code: number) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve({ code, out });
+        };
+        const timer = setTimeout(() => {
+          try {
+            child.kill();
+          } catch {
+            /* already gone */
+          }
+          finish(0);
+        }, COCKPIT_FIND_TIMEOUT_MS);
+        child.stdout?.on("data", (chunk: Buffer) => {
+          out += chunk.toString("utf8");
+          if (out.length > 128 * 1024) {
+            child.kill();
+            finish(0);
+          }
+        });
+        child.on("error", () => finish(-1));
+        child.on("close", (code) => finish(code ?? 0));
+      });
+
+    // ripgrep lists files containing the marker (respects .gitignore); grep is
+    // the ENOENT fallback with explicit dir excludes. Fixed-string match.
+    let found = await runFind("rg", [
+      "--files-with-matches",
+      "--fixed-strings",
+      "--glob",
+      "*.md",
+      "--",
+      COCKPIT_MARKER,
+      ".",
+    ]);
+    if (found.code === -1) {
+      found = await runFind("grep", [
+        "-rIl",
+        "-F",
+        "--include=*.md",
+        ...COCKPIT_IGNORE_DIRS.map((d) => `--exclude-dir=${d}`),
+        "--",
+        COCKPIT_MARKER,
+        ".",
+      ]);
+    }
+    // Skip skill/template/config dirs: they carry the marker heading as
+    // reference (the template) or prose, but are never the session's live doc.
+    const COCKPIT_EXCLUDE = ["/templates/", "/.claude/", "/node_modules/", "/.git/"];
+    const candidates = found.out
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((rel) => path.resolve(cwd, rel))
+      .filter((p) => !COCKPIT_EXCLUDE.some((frag) => p.includes(frag)));
+    if (candidates.length === 0) return context.json({ found: false });
+
+    // Rank newest-first (the doc being actively worked), then return the first
+    // that parses to a REAL cockpit — non-empty and not the unfilled template.
+    const ranked = candidates
+      .slice(0, 200)
+      .map((file) => {
+        try {
+          const st = fs.statSync(file);
+          return st.isFile() ? { file, mtime: st.mtimeMs, size: st.size } : null;
+        } catch {
+          return null;
+        }
+      })
+      .filter((x): x is { file: string; mtime: number; size: number } => x !== null)
+      .sort((a, b) => b.mtime - a.mtime);
+
+    const readCockpitText = (file: string, size: number): string | null => {
+      try {
+        if (size > COCKPIT_MAX_BYTES) {
+          const fd = fs.openSync(file, "r");
+          const buf = Buffer.alloc(COCKPIT_MAX_BYTES);
+          const n = fs.readSync(fd, buf, 0, COCKPIT_MAX_BYTES, 0);
+          fs.closeSync(fd);
+          return buf.subarray(0, n).toString("utf8");
+        }
+        return fs.readFileSync(file, "utf8");
+      } catch {
+        return null;
+      }
+    };
+
+    for (const cand of ranked) {
+      const text = readCockpitText(cand.file, cand.size);
+      if (text === null) continue;
+      const parsed = parseCockpit(text);
+      const empty =
+        parsed.progress.length === 0 &&
+        parsed.working.length === 0 &&
+        parsed.context.length === 0;
+      const isTemplate =
+        (parsed.title?.includes("<Session>") ?? false) ||
+        parsed.progress.some((p) => p.text.includes("<item>"));
+      if (empty || isTemplate) continue;
+      return context.json({ found: true, path: cand.file, ...parsed });
+    }
+    return context.json({ found: false });
+  });
+
   // Full-text search over the wiki root (LOCALTERM_DEFAULT_CWD, else $HOME) for
   // the wiki search box. Prefers ripgrep (respects .gitignore, fast); falls back
   // to `grep -rIn` when rg isn't on PATH. Fixed-string, case-insensitive; caps

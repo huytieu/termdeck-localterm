@@ -35,6 +35,7 @@ import {
   resolvePrDisplayState,
 } from "@/lib/pr-state";
 import { cn } from "@/lib/utils";
+import { CockpitPanel } from "@/components/cockpit-panel";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -3321,6 +3322,7 @@ export const Terminal = () => {
               </InputGroupAddon>
             </InputGroup>
           )}
+          {!isEmbedded() && <CockpitPanel cwd={liveCwd} />}
         </div>
       </div>
 
