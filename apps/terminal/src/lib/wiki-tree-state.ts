@@ -18,6 +18,13 @@ function load(): Set<string> {
 let expanded = load();
 const listeners = new Set<() => void>();
 
+// Refresh counters, one per directory path. A file op (create/rename/move/
+// delete) bumps the affected directories; the rows rendering those directories
+// subscribe to their own counter and re-fetch children when it changes. This is
+// how a mutation shows up in the tree without a full reload.
+const dirVersions = new Map<string, number>();
+const versionListeners = new Set<() => void>();
+
 function persist() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify([...expanded]));
@@ -57,5 +64,21 @@ export const wikiTreeState = {
     if (!changed) return;
     persist();
     listeners.forEach((l) => l());
+  },
+  // Directory refresh: subscribe to a dir's version and bump it after a mutation
+  // so the rows listing that dir re-fetch. Separate listener set from the expand
+  // state so a refresh doesn't churn every row's open/closed subscription.
+  subscribeDir(listener: () => void): () => void {
+    versionListeners.add(listener);
+    return () => {
+      versionListeners.delete(listener);
+    };
+  },
+  dirVersion(path: string): number {
+    return dirVersions.get(path) ?? 0;
+  },
+  bumpDirs(paths: string[]): void {
+    for (const path of paths) dirVersions.set(path, (dirVersions.get(path) ?? 0) + 1);
+    versionListeners.forEach((l) => l());
   },
 };
