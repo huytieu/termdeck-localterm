@@ -150,7 +150,14 @@ export const ARTIFACT_PICKER_JS = String.raw`(function () {
     enabled = v;
     ensureChrome();
     document.documentElement.classList.toggle('__td-active', v);
-    if (!v && hover) hover.style.display = 'none';
+    // Only listen for mousemove (the high-frequency event) while picking; when
+    // off, the picker is dormant and costs nothing per pointer move.
+    if (v) {
+      document.addEventListener('mousemove', onMove, true);
+    } else {
+      document.removeEventListener('mousemove', onMove, true);
+      if (hover) hover.style.display = 'none';
+    }
   }
 
   window.addEventListener('message', function (e) {
@@ -161,7 +168,9 @@ export const ARTIFACT_PICKER_JS = String.raw`(function () {
     else if (d.cmd === 'remove') removePick(d.id);
     else if (d.cmd === 'clear') clearPicks();
   });
-  document.addEventListener('mousemove', onMove, true);
+  // click stays capture-bound (it early-returns when disabled and fires rarely);
+  // mousemove is attached on-demand in setEnabled. scroll/resize only reposition
+  // existing marks, which is a no-op while nothing is selected.
   document.addEventListener('click', onClick, true);
   window.addEventListener('scroll', reflow, true);
   window.addEventListener('resize', reflow, true);
