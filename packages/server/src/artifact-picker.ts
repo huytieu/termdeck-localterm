@@ -178,6 +178,29 @@ export const ARTIFACT_PICKER_JS = String.raw`(function () {
   post({ event: 'ready' });
 })();`;
 
+// A small self-contained page shown IN the artifact iframe when a remote link
+// can't be previewed (auth-gated, timed out, unreachable). Rendering readable
+// HTML — rather than a JSON error the browser shows in its raw "Pretty-print"
+// viewer — keeps the drawer legible and points at the header's open-in-browser
+// button. Links can't navigate out of the sandboxed frame, so the URL is text.
+export const artifactNoticeHtml = (heading: string, detail: string, url?: string): string => {
+  const esc = (s: string): string =>
+    s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light dark"><style>
+html,body{height:100%;margin:0}
+body{display:flex;align-items:center;justify-content:center;background:#0d1117;color:#e6edf3;
+font:14px/1.6 ui-sans-serif,-apple-system,system-ui,sans-serif;padding:24px}
+.card{max-width:460px;text-align:center}
+h1{font-size:17px;margin:0 0 8px}
+p{margin:0 0 12px;color:#9aa4b2}
+code{display:block;word-break:break-all;background:#161b22;border:1px solid #30363d;border-radius:8px;
+padding:10px 12px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9d1d9}
+.hint{font-size:12px;color:#6b7280;margin-top:14px}
+</style></head><body><div class="card"><h1>${esc(heading)}</h1><p>${esc(detail)}</p>${
+    url ? `<code>${esc(url)}</code>` : ""
+  }<p class="hint">Use the ↗ button in the header to open it in a browser tab.</p></div></body></html>`;
+};
+
 // Prepare fetched remote HTML for framing: drop any Content-Security-Policy
 // <meta> (it would block our injected inline picker + relaxed asset loading),
 // inject a <base> so the page's relative asset URLs still resolve against its

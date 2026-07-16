@@ -13,7 +13,7 @@ import { AutomationStore } from "./automation-store.js";
 import { runAgent, compactAgent, listAgentModels, readAgentSession } from "./agent-runner.js";
 import { listAgentSkills } from "./agent-skills.js";
 import { parseGithubRef, fetchGithubMarkdown } from "./github-issue.js";
-import { ARTIFACT_PICKER_JS, injectArtifactChrome } from "./artifact-picker.js";
+import { ARTIFACT_PICKER_JS, artifactNoticeHtml, injectArtifactChrome } from "./artifact-picker.js";
 import type { BatteryProbe } from "./caffeinate-battery.js";
 import { CaffeinateController } from "./caffeinate-controller.js";
 import { CaffeinateManager } from "./caffeinate-manager.js";
@@ -2169,26 +2169,66 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
   // (tailnet / passkey) gates who can reach this, so it isn't an open proxy.
   api.get("/artifact/proxy", async (context) => {
     const raw = (context.req.query("url") ?? "").trim();
+    // Always answer the iframe with HTML: a JSON error would render in the
+    // browser's raw "Pretty-print" viewer as a blank page. Notices are readable.
+    const htmlResponse = (body: string, status = 200): Response =>
+      new Response(body, {
+        status,
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
     let target: URL;
     try {
       target = new URL(raw);
     } catch {
-      return context.json({ error: "invalid_url" }, HTTP_STATUS_BAD_REQUEST);
+      return htmlResponse(
+        artifactNoticeHtml("Can't preview this link", "The URL isn't valid."),
+        HTTP_STATUS_BAD_REQUEST,
+      );
     }
     if (target.protocol !== "http:" && target.protocol !== "https:") {
-      return context.json({ error: "unsupported_scheme" }, HTTP_STATUS_BAD_REQUEST);
+      return htmlResponse(
+        artifactNoticeHtml("Can't preview this link", "Only http(s) links can be previewed."),
+        HTTP_STATUS_BAD_REQUEST,
+      );
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
     try {
-      const upstream = await fetch(target, {
-        signal: controller.signal,
-        redirect: "follow",
-        headers: { "user-agent": "TermDeck-ArtifactProxy", accept: "text/html,*/*" },
-      });
+      // Follow redirects by hand so a hop to a DIFFERENT host — the tell-tale of
+      // an SSO/login gate (e.g. Vouch, Okta) — is caught and reported instead of
+      // silently landing on a login page the server-side fetch can't complete.
+      let current = target;
+      let upstream: Response | null = null;
+      for (let hop = 0; hop < 5; hop++) {
+        upstream = await fetch(current, {
+          signal: controller.signal,
+          redirect: "manual",
+          headers: { "user-agent": "TermDeck-ArtifactProxy", accept: "text/html,*/*" },
+        });
+        if (upstream.status < 300 || upstream.status >= 400) break;
+        const location = upstream.headers.get("location");
+        if (!location) break;
+        const next = new URL(location, current);
+        if (next.host !== target.host) {
+          return htmlResponse(
+            artifactNoticeHtml(
+              "This deploy needs a sign-in",
+              `It redirects to ${next.host}, which the in-app preview can't authenticate to. Open it in a browser tab where you're already signed in.`,
+              target.toString(),
+            ),
+          );
+        }
+        current = next;
+      }
+      if (!upstream) {
+        return htmlResponse(
+          artifactNoticeHtml("Couldn't load this link", "No response from the site.", target.toString()),
+          HTTP_STATUS_BAD_GATEWAY,
+        );
+      }
       const contentType = upstream.headers.get("content-type") ?? "";
-      // Non-HTML (JSON, images opened directly) — stream through untouched so the
-      // drawer can still preview it, but there's nothing to inject.
+      // Non-HTML (images opened directly) — stream through untouched. JSON/plain
+      // would render raw, but there's nothing to inject into it.
       if (!/text\/html/i.test(contentType)) {
         const buf = new Uint8Array(await upstream.arrayBuffer());
         return new Response(buf, {
@@ -2200,20 +2240,19 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
         });
       }
       const html = await upstream.text();
-      const injected = injectArtifactChrome(html, { baseHref: upstream.url || target.toString() });
-      return new Response(injected, {
-        status: upstream.status,
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-          // Don't forward the upstream CSP/frame headers — they'd block framing
-          // and our injected inline picker.
-          "cache-control": "no-store",
-        },
-      });
+      const injected = injectArtifactChrome(html, { baseHref: current.toString() });
+      // Don't forward upstream CSP/frame headers — they'd block framing + the picker.
+      return htmlResponse(injected, upstream.status);
     } catch (error) {
       const aborted = error instanceof Error && error.name === "AbortError";
-      return context.json(
-        { error: aborted ? "timeout" : "fetch_failed" },
+      return htmlResponse(
+        artifactNoticeHtml(
+          aborted ? "Preview timed out" : "Couldn't load this link",
+          aborted
+            ? "The site took too long to respond."
+            : "The site couldn't be reached from the daemon.",
+          target.toString(),
+        ),
         HTTP_STATUS_BAD_GATEWAY,
       );
     } finally {
