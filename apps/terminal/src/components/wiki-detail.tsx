@@ -12,17 +12,23 @@ import {
 import {
   BookOpen,
   ChevronRight,
+  ExternalLink,
   File,
   FileText,
   Folder,
   FolderOpen,
   Globe,
   Link2,
+  MousePointerClick,
   PanelRight,
   PanelRightClose,
   Pencil,
+  Plus,
+  Send,
   Sparkles,
   SquareTerminal,
+  Trash2,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -57,6 +63,7 @@ import {
   type FileTextResponse,
 } from "@/components/file-preview";
 import { isGithubArtifactPath, githubVirtualName } from "@/utils/github-link";
+import { isPreviewableUrl, proxyUrlFor, remoteHostLabel } from "@/utils/artifact-url";
 import { buildMediaUrl } from "@/utils/build-media-url";
 import { revealFileLocation } from "@/utils/reveal-file";
 
@@ -342,6 +349,157 @@ const AiSelectionPopover = ({
   );
 };
 
+// A single element the user picked inside the framed artifact. `rect`/`anchor`
+// place the note popover next to it; `selector` + `snippet` are what the agent
+// receives so it can locate the element in the source.
+export interface ArtifactPick {
+  id: string;
+  selector: string;
+  tag: string;
+  snippet: string;
+  text: string;
+  note: string;
+  anchor: { top: number; left: number };
+}
+
+// The note popover for the element just clicked in Tweak mode: type what should
+// change, then either send it on its own (Send now) or stash it in the batch
+// (Add to batch) and keep picking more elements.
+const TweakNotePopover = ({
+  pick,
+  sourceSid,
+  busy,
+  onSendNow,
+  onAddToBatch,
+  onDiscard,
+}: {
+  pick: ArtifactPick;
+  sourceSid: string | null;
+  busy: boolean;
+  onSendNow: (note: string) => void;
+  onAddToBatch: (note: string) => void;
+  onDiscard: () => void;
+}) => {
+  const [note, setNote] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  return (
+    <div
+      className="fixed z-50 w-80 rounded-lg border border-border bg-popover p-2 shadow-xl"
+      style={{
+        top: Math.min(pick.anchor.top + 6, window.innerHeight - 190),
+        left: Math.min(pick.anchor.left, window.innerWidth - 340),
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-medium text-muted-foreground">
+        <MousePointerClick className="size-3.5 text-[var(--primary)]" />
+        <span className="truncate font-mono">&lt;{pick.tag}&gt;</span>
+        <span className="truncate text-muted-foreground/50">{pick.selector}</span>
+        <button
+          type="button"
+          aria-label="discard selection"
+          className="ml-auto rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
+          onClick={onDiscard}
+        >
+          <X className="size-3" />
+        </button>
+      </div>
+      <textarea
+        ref={inputRef}
+        value={note}
+        placeholder="What should change about this element?"
+        aria-label="tweak note"
+        rows={2}
+        className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none focus:border-ring"
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSendNow(note);
+          if (e.key === "Escape") onDiscard();
+        }}
+      />
+      <div className="mt-1.5 flex items-center justify-end gap-1.5 px-1">
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={busy || !note.trim()}
+          onClick={() => onAddToBatch(note)}
+          title="Stash this and keep picking"
+        >
+          <Plus className="size-3" />
+          Add to batch
+        </Button>
+        <Button size="xs" disabled={busy || !note.trim()} onClick={() => onSendNow(note)}>
+          {busy ? <Spinner className="size-3" /> : <Send className="size-3" />}
+          {sourceSid ? "Send now" : "Run"}
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+// The batch tray: the running list of stashed element tweaks, sent to the agent
+// together as one message. Docked to the bottom of the drawer while Tweak mode
+// is on and at least one tweak is stashed.
+const TweakTray = ({
+  picks,
+  busy,
+  error,
+  onSend,
+  onClear,
+  onRemove,
+}: {
+  picks: ArtifactPick[];
+  busy: boolean;
+  error: string | null;
+  onSend: () => void;
+  onClear: () => void;
+  onRemove: (id: string) => void;
+}) => (
+  <div className="shrink-0 border-t border-border bg-muted/20">
+    <div className="flex items-center gap-2 px-3 py-1.5">
+      <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {picks.length} tweak{picks.length === 1 ? "" : "s"} staged
+      </span>
+      {error ? <span className="font-mono text-[10px] text-amber-400">{error}</span> : null}
+      <div className="ml-auto flex items-center gap-1.5">
+        <Button size="xs" variant="ghost" disabled={busy} onClick={onClear}>
+          Clear
+        </Button>
+        <Button size="xs" disabled={busy || picks.length === 0} onClick={onSend}>
+          {busy ? <Spinner className="size-3" /> : <Send className="size-3" />}
+          Send {picks.length} tweak{picks.length === 1 ? "" : "s"}
+        </Button>
+      </div>
+    </div>
+    <ul className="max-h-32 overflow-auto px-3 pb-2">
+      {picks.map((p, i) => (
+        <li key={p.id} className="flex items-start gap-2 border-t border-border/40 py-1">
+          <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--primary)] font-mono text-[9px] font-semibold text-primary-foreground">
+            {i + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-mono text-[10px] text-muted-foreground/70">
+              &lt;{p.tag}&gt; · {p.selector}
+            </div>
+            <div className="truncate text-[11px] text-foreground">{p.note}</div>
+          </div>
+          <button
+            type="button"
+            aria-label="remove tweak"
+            className="mt-0.5 rounded p-0.5 text-muted-foreground/50 hover:text-foreground"
+            onClick={() => onRemove(p.id)}
+          >
+            <Trash2 className="size-3" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  </div>
+);
+
 // Wiki-mode detail pane: renders the selected vault file natively. Markdown and
 // HTML render by default with an opt-in source view; other text files show the
 // syntax-highlighted source. Any text file can be edited in place (saved via
@@ -374,10 +532,22 @@ export const WikiDetail = ({
   // vault and render THAT. `activePath` is what every file op below uses.
   const [resolvedPath, setResolvedPath] = useState<string | null>(null);
   const activePath = resolvedPath ?? path;
+  // A remote http(s) deploy link (not a vault file, not a github issue): framed
+  // through the same-origin proxy so the element picker can be injected.
+  const remote = isPreviewableUrl(path);
   const [ai, setAi] = useState<{ selection: string; anchor: { top: number; left: number } } | null>(
     null,
   );
   const [vaultRoot, setVaultRoot] = useState<string | null>(null);
+  // Element-picker ("Tweak" mode) state. The framed artifact (vault HTML srcDoc
+  // or the proxied remote page) posts a `selected` message per click; `pending`
+  // is the element awaiting a note, `batch` is the stash sent together.
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [pickMode, setPickMode] = useState(false);
+  const [pending, setPending] = useState<ArtifactPick | null>(null);
+  const [batch, setBatch] = useState<ArtifactPick[]>([]);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const reading = useSyncExternalStore(subscribeReadingMode, readingMode, () => false);
   const infoPanel = useSyncExternalStore(subscribeInfoPanel, infoPanelOpen, () => true);
 
@@ -415,6 +585,10 @@ export const WikiDetail = ({
     setEditing(false);
     setAi(null);
     setResolvedPath(null);
+
+    // A remote deploy link isn't fetched here — the iframe loads it through the
+    // proxy directly. Nothing to read via /api/file/text.
+    if (isPreviewableUrl(path)) return () => controller.abort();
 
     const fetchText = async (
       target: string,
@@ -538,7 +712,7 @@ export const WikiDetail = ({
   // A GitHub issue/PR rendered in the drawer is read-only (a virtual markdown
   // doc, not a file on disk), so edit/save is suppressed for it.
   const isGithub = isGithubArtifactPath(path);
-  const basename = activePath.slice(activePath.lastIndexOf("/") + 1);
+  const basename = remote ? remoteHostLabel(path) : activePath.slice(activePath.lastIndexOf("/") + 1);
 
   // Breadcrumb: the trail from the vault root down to this file, so you can see
   // where the file lives and click a folder to jump there. Each crumb carries
@@ -564,10 +738,26 @@ export const WikiDetail = ({
   }, [activePath, vaultRoot, isGithub]);
   const isText = result?.kind === "text";
   const markdown = isText && isMarkdownPath(result.path);
-  const html = isText && isHtmlPath(result.path);
+  // A remote deploy is HTML too — framed via the proxy rather than read as text.
+  const html = remote || (isText && isHtmlPath(result.path));
   const csv = isText && isCsvPath(result.path);
   // Markdown/HTML/CSV render by default; other text files are source-only.
   const renderable = markdown || html || csv;
+  // Both HTML surfaces (a vault .html srcDoc, a proxied remote page) get the
+  // element picker, so "Tweak" mode is offered whenever HTML is being rendered.
+  const pickable = html && !editing && !showSource;
+  // The srcDoc for a vault .html file, with the picker script appended so a
+  // click inside it posts its selector back to the shell. The remote case loads
+  // the already-injected document through the proxy instead.
+  const srcDoc =
+    !remote && isText && isHtmlPath(result.path)
+      ? /<\/body>/i.test(result.content)
+        ? result.content.replace(
+            /<\/body>/i,
+            `<script src="/api/artifact/picker.js" data-termdeck-picker></script></body>`,
+          )
+        : `${result.content}<script src="/api/artifact/picker.js" data-termdeck-picker></script>`
+      : null;
 
   const startEdit = () => {
     if (!isText || isGithub) return;
@@ -627,6 +817,137 @@ export const WikiDetail = ({
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
   }, [ai]);
+
+  // ---- Element picker ("Tweak" mode) ---------------------------------------
+  const postToIframe = useCallback((cmd: string, extra?: Record<string, unknown>) => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { source: "termdeck-picker", cmd, ...extra },
+      "*",
+    );
+  }, []);
+
+  // Switching artifact resets pick state so tweaks never leak across files.
+  useEffect(() => {
+    setPickMode(false);
+    setPending(null);
+    setBatch([]);
+    setSendError(null);
+  }, [path]);
+
+  // Bridge the framed picker: on `ready` (re)assert the current mode; on
+  // `selected` translate the element's in-frame rect to page coordinates (via
+  // the iframe's own offset) and open the note popover, discarding any prior
+  // un-noted pending pick so at most one element waits for a note at a time.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const data = event.data as
+        | { source?: string; event?: string; id?: string; selector?: string; tag?: string; snippet?: string; text?: string; rect?: { top: number; left: number; height: number } }
+        | undefined;
+      if (!data || data.source !== "termdeck-picker") return;
+      if (data.event === "ready") {
+        if (pickMode) postToIframe("enable");
+        return;
+      }
+      if (data.event === "selected" && data.id && data.rect) {
+        const frame = iframeRef.current?.getBoundingClientRect();
+        const anchor = {
+          top: (frame?.top ?? 0) + data.rect.top + data.rect.height,
+          left: (frame?.left ?? 0) + data.rect.left,
+        };
+        setPending((prev) => {
+          if (prev) postToIframe("remove", { id: prev.id });
+          return {
+            id: data.id as string,
+            selector: data.selector ?? "",
+            tag: data.tag ?? "element",
+            snippet: data.snippet ?? "",
+            text: data.text ?? "",
+            note: "",
+            anchor,
+          };
+        });
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [pickMode, postToIframe]);
+
+  const togglePick = () => {
+    const next = !pickMode;
+    setPickMode(next);
+    postToIframe(next ? "enable" : "disable");
+    if (!next && pending) {
+      postToIframe("remove", { id: pending.id });
+      setPending(null);
+    }
+  };
+
+  const discardPending = () => {
+    if (pending) postToIframe("remove", { id: pending.id });
+    setPending(null);
+  };
+
+  const removeFromBatch = (id: string) => {
+    postToIframe("remove", { id });
+    setBatch((b) => b.filter((p) => p.id !== id));
+  };
+
+  const clearAll = () => {
+    postToIframe("clear");
+    setBatch([]);
+    setPending(null);
+  };
+
+  const sendTweaks = async (items: ArtifactPick[]) => {
+    if (items.length === 0 || sending) return;
+    setSending(true);
+    setSendError(null);
+    const ref = remote ? path : activePath;
+    const lines = items.map(
+      (it, i) =>
+        `Tweak ${i + 1} — \`${it.selector}\` (<${it.tag}>):\n  Current: ${it.snippet}\n  Change: ${it.note}`,
+    );
+    const header =
+      items.length === 1
+        ? `In the artifact \`${ref}\`, update this element:`
+        : `In the artifact \`${ref}\`, apply these ${items.length} edits to the matching elements:`;
+    const prompt = `${header}\n\n${lines.join("\n\n")}`;
+    try {
+      const baseDir = window.localStorage.getItem(SESSION_BASE_DIR_KEY) || undefined;
+      const { id } = await chatAboutSelection({
+        sessionId: sourceSid,
+        path: ref,
+        selection: "",
+        prompt,
+        line: null,
+        baseDir,
+      });
+      postToIframe("clear");
+      postToIframe("disable");
+      setBatch([]);
+      setPending(null);
+      setPickMode(false);
+      setSending(false);
+      openSession(id);
+    } catch {
+      setSending(false);
+      setSendError("Couldn't send the tweak.");
+    }
+  };
+
+  const sendNow = (note: string) => {
+    if (!pending || !note.trim()) return;
+    void sendTweaks([{ ...pending, note: note.trim() }]);
+  };
+
+  const addToBatch = (note: string) => {
+    if (!pending || !note.trim()) return;
+    setBatch((b) => [...b, { ...pending, note: note.trim() }]);
+    setPending(null);
+  };
+
+  const sendBatch = () => void sendTweaks(batch);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -707,7 +1028,7 @@ export const WikiDetail = ({
           </>
         ) : (
           <>
-            {!isGithub && (
+            {!isGithub && !remote && (
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -718,7 +1039,7 @@ export const WikiDetail = ({
                 <FolderOpen className="size-3.5" />
               </Button>
             )}
-            {!isGithub && (
+            {!isGithub && !remote && (
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -740,7 +1061,30 @@ export const WikiDetail = ({
                 <Pencil className="size-3.5" />
               </Button>
             )}
-            {renderable && (
+            {remote && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="open in browser"
+                title="Open in a browser tab"
+                onClick={() => window.open(path, "_blank", "noopener,noreferrer")}
+              >
+                <ExternalLink className="size-3.5" />
+              </Button>
+            )}
+            {pickable && (
+              <Button
+                variant={pickMode ? "default" : "ghost"}
+                size="icon-sm"
+                aria-label="tweak elements"
+                title={pickMode ? "Exit tweak mode" : "Tweak: pick elements to change"}
+                onClick={togglePick}
+                className={cn(!pickMode && "text-muted-foreground hover:text-foreground")}
+              >
+                <MousePointerClick className="size-3.5" />
+              </Button>
+            )}
+            {renderable && !remote && (
               <>
                 <Button
                   variant="ghost"
@@ -819,9 +1163,20 @@ export const WikiDetail = ({
 
       <div
         className="min-h-0 flex-1 overflow-auto"
-        onMouseUp={editing ? undefined : onBodyMouseUp}
+        onMouseUp={editing || pickMode ? undefined : onBodyMouseUp}
       >
-        {error ? (
+        {remote ? (
+          <iframe
+            // The proxied remote deploy: served same-origin with the picker
+            // already injected, but still sandboxed to an opaque origin so it
+            // can't script the shell — the picker bridges via postMessage.
+            ref={iframeRef}
+            title={basename}
+            src={proxyUrlFor(path)}
+            sandbox="allow-scripts allow-popups allow-forms"
+            className="h-full w-full border-0 bg-white"
+          />
+        ) : error ? (
           <div className="flex h-full items-center justify-center p-8 text-sm text-muted-foreground">
             {error}
           </div>
@@ -850,9 +1205,11 @@ export const WikiDetail = ({
           html && !showSource ? (
             <iframe
               // Vault-owned HTML rendered in a null-origin sandbox: scripts run
-              // (Tailwind CDN etc.) but it can't touch the app origin.
+              // (Tailwind CDN etc.) but it can't touch the app origin. The
+              // picker script is appended so clicks post selectors back out.
+              ref={iframeRef}
               title={basename}
-              srcDoc={result.content}
+              srcDoc={srcDoc ?? result.content}
               sandbox="allow-scripts allow-popups allow-forms"
               className="h-full w-full border-0 bg-white"
             />
@@ -942,6 +1299,17 @@ export const WikiDetail = ({
         )}
       </div>
 
+      {pickMode && batch.length > 0 ? (
+        <TweakTray
+          picks={batch}
+          busy={sending}
+          error={sendError}
+          onSend={sendBatch}
+          onClear={clearAll}
+          onRemove={removeFromBatch}
+        />
+      ) : null}
+
       {ai ? (
         <AiSelectionPopover
           path={activePath}
@@ -950,6 +1318,17 @@ export const WikiDetail = ({
           sourceSid={sourceSid}
           anchor={ai.anchor}
           onClose={() => setAi(null)}
+        />
+      ) : null}
+
+      {pending ? (
+        <TweakNotePopover
+          pick={pending}
+          sourceSid={sourceSid}
+          busy={sending}
+          onSendNow={sendNow}
+          onAddToBatch={addToBatch}
+          onDiscard={discardPending}
         />
       ) : null}
     </div>

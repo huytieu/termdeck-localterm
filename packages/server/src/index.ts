@@ -13,6 +13,7 @@ import { AutomationStore } from "./automation-store.js";
 import { runAgent, compactAgent, listAgentModels, readAgentSession } from "./agent-runner.js";
 import { listAgentSkills } from "./agent-skills.js";
 import { parseGithubRef, fetchGithubMarkdown } from "./github-issue.js";
+import { ARTIFACT_PICKER_JS, injectArtifactChrome } from "./artifact-picker.js";
 import type { BatteryProbe } from "./caffeinate-battery.js";
 import { CaffeinateController } from "./caffeinate-controller.js";
 import { CaffeinateManager } from "./caffeinate-manager.js";
@@ -2149,6 +2150,75 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     const basename = rawPath.slice(rawPath.lastIndexOf("/") + 1) || "file";
     registry.setTitleById(id, `AI · ${basename}`, ownerFor(context));
     return context.json({ delivered: "new", id }, HTTP_STATUS_CREATED);
+  });
+
+  // The element-picker script, served once and referenced by both artifact
+  // injection paths (client srcDoc for vault HTML, the proxy below for remote
+  // deploys). Long-cache; the content is versioned with the daemon build.
+  api.get("/artifact/picker.js", (context) => {
+    context.header("content-type", "application/javascript; charset=utf-8");
+    context.header("cache-control", "public, max-age=3600");
+    context.header("x-content-type-options", "nosniff");
+    return context.body(ARTIFACT_PICKER_JS);
+  });
+
+  // Reverse-proxy a remote deploy URL so it can be framed same-origin in the
+  // artifact drawer with the element picker injected. Only the top HTML document
+  // is fetched here; a <base> tag makes its assets load direct from the origin.
+  // Scoped to http(s); response size + time are bounded. The daemon's own auth
+  // (tailnet / passkey) gates who can reach this, so it isn't an open proxy.
+  api.get("/artifact/proxy", async (context) => {
+    const raw = (context.req.query("url") ?? "").trim();
+    let target: URL;
+    try {
+      target = new URL(raw);
+    } catch {
+      return context.json({ error: "invalid_url" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    if (target.protocol !== "http:" && target.protocol !== "https:") {
+      return context.json({ error: "unsupported_scheme" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const upstream = await fetch(target, {
+        signal: controller.signal,
+        redirect: "follow",
+        headers: { "user-agent": "TermDeck-ArtifactProxy", accept: "text/html,*/*" },
+      });
+      const contentType = upstream.headers.get("content-type") ?? "";
+      // Non-HTML (JSON, images opened directly) — stream through untouched so the
+      // drawer can still preview it, but there's nothing to inject.
+      if (!/text\/html/i.test(contentType)) {
+        const buf = new Uint8Array(await upstream.arrayBuffer());
+        return new Response(buf, {
+          status: upstream.status,
+          headers: {
+            "content-type": contentType || "application/octet-stream",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
+      const html = await upstream.text();
+      const injected = injectArtifactChrome(html, { baseHref: upstream.url || target.toString() });
+      return new Response(injected, {
+        status: upstream.status,
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+          // Don't forward the upstream CSP/frame headers — they'd block framing
+          // and our injected inline picker.
+          "cache-control": "no-store",
+        },
+      });
+    } catch (error) {
+      const aborted = error instanceof Error && error.name === "AbortError";
+      return context.json(
+        { error: aborted ? "timeout" : "fetch_failed" },
+        HTTP_STATUS_BAD_GATEWAY,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
   // Locate a file under the wiki root by its trailing path segments. A clicked
