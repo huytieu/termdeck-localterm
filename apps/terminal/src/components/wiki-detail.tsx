@@ -263,55 +263,34 @@ const InfoPanel = ({
 };
 
 // Floating "Ask AI" popover shown over a text selection in the rendered/source
-// view. The user types a prompt; on submit a Claude Code session spawns in the
-// file's directory seeded with the prompt + the selected text.
+// view. The user types a prompt, then either sends it right away (Send now) or
+// stashes it in the ask batch (Add to batch) and keeps selecting more passages;
+// staged asks go out together as one message from the AskTray.
 const AiSelectionPopover = ({
-  path,
   selection,
-  line,
   sourceSid,
   anchor,
+  busy,
+  error,
+  onSendNow,
+  onAddToBatch,
   onClose,
 }: {
-  path: string;
   selection: string;
-  line: number | null;
   sourceSid: string | null;
   anchor: { top: number; left: number };
+  busy: boolean;
+  error: string | null;
+  onSendNow: (prompt: string) => void;
+  onAddToBatch: (prompt: string) => void;
   onClose: () => void;
 }) => {
   const [prompt, setPrompt] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
-
-  const submit = async () => {
-    const trimmed = prompt.trim();
-    if (!trimmed || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const baseDir = window.localStorage.getItem(SESSION_BASE_DIR_KEY) || undefined;
-      const { id } = await chatAboutSelection({
-        sessionId: sourceSid,
-        path,
-        selection,
-        prompt: trimmed,
-        line,
-        baseDir,
-      });
-      onClose();
-      // Focus the session the chat landed in (the linked one, or the fresh spawn).
-      openSession(id);
-    } catch {
-      setBusy(false);
-      setError("Couldn't send the message.");
-    }
-  };
 
   return (
     <div
@@ -331,7 +310,8 @@ const AiSelectionPopover = ({
         className="h-8 w-full rounded-md border border-border bg-background px-2 font-mono text-xs outline-none focus:border-ring"
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") void submit();
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onAddToBatch(prompt);
+          else if (e.key === "Enter") onSendNow(prompt);
           if (e.key === "Escape") onClose();
         }}
       />
@@ -340,14 +320,97 @@ const AiSelectionPopover = ({
         <span className="truncate text-[10px] text-muted-foreground/60">
           {selection.length} chars · {sourceSid ? "→ linked session" : "→ new session"}
         </span>
-        <Button size="xs" disabled={busy || !prompt.trim()} onClick={() => void submit()}>
-          {busy ? <Spinner className="size-3" /> : <Sparkles className="size-3" />}
-          {sourceSid ? "Chat" : "Run"}
-        </Button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={busy || !prompt.trim()}
+            onClick={() => onAddToBatch(prompt)}
+            title="Stash this and keep selecting (⌘↵)"
+          >
+            <Plus className="size-3" />
+            Add to batch
+          </Button>
+          <Button size="xs" disabled={busy || !prompt.trim()} onClick={() => onSendNow(prompt)}>
+            {busy ? <Spinner className="size-3" /> : <Sparkles className="size-3" />}
+            {sourceSid ? "Send now" : "Run"}
+          </Button>
+        </div>
       </div>
     </div>
   );
 };
+
+// A selection + prompt stashed for batch sending: everything sendAsks needs to
+// quote the passage back to the agent alongside the instruction.
+interface SelectionAsk {
+  id: string;
+  selection: string;
+  line: number | null;
+  prompt: string;
+}
+
+// The ask tray: staged selection asks, sent to the agent together as one
+// message. Docked to the bottom of the pane while at least one ask is staged.
+const AskTray = ({
+  asks,
+  sourceSid,
+  busy,
+  error,
+  onSend,
+  onClear,
+  onRemove,
+}: {
+  asks: SelectionAsk[];
+  sourceSid: string | null;
+  busy: boolean;
+  error: string | null;
+  onSend: () => void;
+  onClear: () => void;
+  onRemove: (id: string) => void;
+}) => (
+  <div className="shrink-0 border-t border-border bg-muted/20">
+    <div className="flex items-center gap-2 px-3 py-1.5">
+      <span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {asks.length} ask{asks.length === 1 ? "" : "s"} staged · {sourceSid ? "→ linked session" : "→ new session"}
+      </span>
+      {error ? <span className="font-mono text-[10px] text-amber-400">{error}</span> : null}
+      <div className="ml-auto flex items-center gap-1.5">
+        <Button size="xs" variant="ghost" disabled={busy} onClick={onClear}>
+          Clear
+        </Button>
+        <Button size="xs" disabled={busy || asks.length === 0} onClick={onSend}>
+          {busy ? <Spinner className="size-3" /> : <Send className="size-3" />}
+          Send {asks.length} ask{asks.length === 1 ? "" : "s"}
+        </Button>
+      </div>
+    </div>
+    <ul className="max-h-32 overflow-auto px-3 pb-2">
+      {asks.map((a, i) => (
+        <li key={a.id} className="flex items-start gap-2 border-t border-border/40 py-1">
+          <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-[var(--primary)] font-mono text-[9px] font-semibold text-primary-foreground">
+            {i + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-mono text-[10px] text-muted-foreground/70">
+              {a.line ? `line ${a.line} · ` : ""}
+              {a.selection.replace(/\s+/g, " ").slice(0, 80)}
+            </div>
+            <div className="truncate text-[11px] text-foreground">{a.prompt}</div>
+          </div>
+          <button
+            type="button"
+            aria-label="remove ask"
+            className="mt-0.5 rounded p-0.5 text-muted-foreground/50 hover:text-foreground"
+            onClick={() => onRemove(a.id)}
+          >
+            <Trash2 className="size-3" />
+          </button>
+        </li>
+      ))}
+    </ul>
+  </div>
+);
 
 // A single element the user picked inside the framed artifact. `rect`/`anchor`
 // place the note popover next to it; `selector` + `snippet` are what the agent
@@ -538,6 +601,11 @@ export const WikiDetail = ({
   const [ai, setAi] = useState<{ selection: string; anchor: { top: number; left: number } } | null>(
     null,
   );
+  // Selection-ask batch: staged "chat about this" prompts sent together as one
+  // message (mirrors the Tweak batch, but for text selections).
+  const [asks, setAsks] = useState<SelectionAsk[]>([]);
+  const [askSending, setAskSending] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
   const [vaultRoot, setVaultRoot] = useState<string | null>(null);
   // Element-picker ("Tweak" mode) state. The framed artifact (vault HTML srcDoc
   // or the proxied remote page) posts a `selected` message per click; `pending`
@@ -584,6 +652,8 @@ export const WikiDetail = ({
     setShowSource(line !== null); // a search hit lands on the source at its line
     setEditing(false);
     setAi(null);
+    setAsks([]);
+    setAskError(null);
     setResolvedPath(null);
 
     // A remote deploy link isn't fetched here — the iframe loads it through the
@@ -949,6 +1019,64 @@ export const WikiDetail = ({
 
   const sendBatch = () => void sendTweaks(batch);
 
+  // Send one or more selection asks. A single ask keeps the original wire shape
+  // (server quotes the selection with a path:line ref); a batch is composed
+  // client-side so each passage rides along with its own instruction.
+  const sendAsks = async (items: SelectionAsk[]) => {
+    if (items.length === 0 || askSending) return;
+    setAskSending(true);
+    setAskError(null);
+    const baseDir = window.localStorage.getItem(SESSION_BASE_DIR_KEY) || undefined;
+    const single = items.length === 1;
+    const composed = single
+      ? items[0].prompt
+      : `Handle these ${items.length} notes on \`${activePath}\`:\n\n${items
+          .map(
+            (it, i) =>
+              `Note ${i + 1}${it.line ? ` (line ${it.line})` : ""}: ${it.prompt}\n\`\`\`\n${it.selection}\n\`\`\``,
+          )
+          .join("\n\n")}`;
+    try {
+      const { id } = await chatAboutSelection({
+        sessionId: sourceSid,
+        path: activePath,
+        selection: single ? items[0].selection : "",
+        prompt: composed,
+        line: single ? items[0].line : null,
+        baseDir,
+      });
+      setAi(null);
+      setAsks([]);
+      setAskSending(false);
+      // Focus the session the chat landed in (the linked one, or the fresh spawn).
+      openSession(id);
+    } catch {
+      setAskSending(false);
+      setAskError("Couldn't send the message.");
+    }
+  };
+
+  const askSendNow = (prompt: string) => {
+    if (!ai || !prompt.trim()) return;
+    void sendAsks([{ id: crypto.randomUUID(), selection: ai.selection, line, prompt: prompt.trim() }]);
+  };
+
+  const askAddToBatch = (prompt: string) => {
+    if (!ai || !prompt.trim()) return;
+    setAsks((a) => [
+      ...a,
+      { id: crypto.randomUUID(), selection: ai.selection, line, prompt: prompt.trim() },
+    ]);
+    setAi(null);
+  };
+
+  const sendAskBatch = () => void sendAsks(asks);
+  const removeAsk = (id: string) => setAsks((a) => a.filter((x) => x.id !== id));
+  const clearAsks = () => {
+    setAsks([]);
+    setAskError(null);
+  };
+
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-4">
@@ -1310,13 +1438,27 @@ export const WikiDetail = ({
         />
       ) : null}
 
+      {asks.length > 0 ? (
+        <AskTray
+          asks={asks}
+          sourceSid={sourceSid}
+          busy={askSending}
+          error={askError}
+          onSend={sendAskBatch}
+          onClear={clearAsks}
+          onRemove={removeAsk}
+        />
+      ) : null}
+
       {ai ? (
         <AiSelectionPopover
-          path={activePath}
           selection={ai.selection}
-          line={line}
           sourceSid={sourceSid}
           anchor={ai.anchor}
+          busy={askSending}
+          error={askError}
+          onSendNow={askSendNow}
+          onAddToBatch={askAddToBatch}
           onClose={() => setAi(null)}
         />
       ) : null}
