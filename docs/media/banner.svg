@@ -1,79 +1,125 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" font-family="Menlo, SFMono-Regular, Consolas, monospace">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 600" font-family="Menlo, SFMono-Regular, Consolas, monospace">
   <style>
-    .bg { fill: #161616; }
-    .panel { fill: #1e1e1e; stroke: #3d3d3d; stroke-width: 2; }
-    .bar { fill: #282828; }
-    .mut { fill: #9b9b9b; }
-    .fg { fill: #dadada; }
-    .coral { fill: #e13f5e; }
-    .green { fill: #4ec9a0; }
-    .amber { fill: #e5b567; }
-
-    .type span { opacity: 0; }
-    .t { opacity: 0; animation: reveal .01s linear forwards; }
-    @keyframes reveal { to { opacity: 1; } }
+    .mut { fill: #9b9b9b; } .fg { fill: #dadada; } .coral { fill: #e13f5e; }
+    .green { fill: #4ec9a0; } .amber { fill: #e5b567; }
 
     .cursor { animation: blink 1.1s steps(1) infinite; }
-    @keyframes blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0; } }
+    @keyframes blink { 0%,60% { opacity:1 } 61%,100% { opacity:0 } }
+
+    .path-hot { animation: hot 3.2s ease-in-out infinite; }
+    @keyframes hot { 0%,55%,100% { fill:#e13f5e } 60%,80% { fill:#ffffff } }
+    .path-under { animation: under 3.2s ease-in-out infinite; }
+    @keyframes under { 0%,55%,100% { opacity:.5 } 60%,80% { opacity:1 } }
+
+    .doc-el { opacity: 0; animation: render 6.4s ease-out infinite; }
+    @keyframes render { 0%,12% { opacity:0; transform:translateY(5px) } 20%,88% { opacity:1; transform:translateY(0) } 96%,100% { opacity:0 } }
+
+    .flow  { stroke-dasharray: 8 7; animation: dashf 1.2s linear infinite; }
+    .flowb { stroke-dasharray: 8 7; animation: dashb 1.2s linear infinite; }
+    @keyframes dashf { to { stroke-dashoffset: -30; } }
+    @keyframes dashb { to { stroke-dashoffset: 30; } }
 
     .dot-run { animation: pulse 1.6s ease-in-out infinite; }
-    .dot-you { animation: pulse 0.8s ease-in-out infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-
-    .feat { opacity: 0; animation: rise 0.6s ease-out forwards; }
-    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-
-    .scan { animation: scan 7s linear infinite; }
-    @keyframes scan { 0% { transform: translateY(0); opacity: 0; } 6% { opacity: .05; } 94% { opacity: .05; } 100% { transform: translateY(330px); opacity: 0; } }
+    @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:.25 } }
 
     @media (prefers-reduced-motion: reduce) {
-      .t, .feat { animation: none; opacity: 1; }
-      .cursor, .dot-run, .dot-you, .scan { animation: none; }
+      .doc-el { animation: none; opacity: 1; }
+      .cursor,.path-hot,.path-under,.flow,.flowb,.dot-run { animation: none; }
     }
   </style>
 
-  <rect class="bg" width="1200" height="480"/>
-  <rect class="panel" x="50" y="40" width="1100" height="400" rx="14"/>
-  <path class="bar" d="M50 54 a14 14 0 0 1 14 -14 h1072 a14 14 0 0 1 14 14 v28 h-1100 z"/>
-  <line x1="50" y1="83" x2="1150" y2="83" stroke="#3d3d3d" stroke-width="2"/>
-  <circle cx="78" cy="61" r="7" fill="#ff5f57"/>
-  <circle cx="102" cy="61" r="7" fill="#febc2e"/>
-  <circle cx="126" cy="61" r="7" fill="#28c840"/>
-  <text x="600" y="66" text-anchor="middle" font-size="15" class="mut">termdeck — the deck your agents work on</text>
+  <rect width="1500" height="600" fill="#161616"/>
 
-  <rect class="scan" x="52" y="90" width="1096" height="26" fill="#ffffff" opacity="0"/>
+  <!-- wordmark strip -->
+  <text x="60" y="78" font-size="46" font-weight="bold"><tspan fill="#ffffff">Term</tspan><tspan class="coral">Deck</tspan></text>
+  <rect class="cursor coral" x="292" y="42" width="20" height="40"/>
+  <text x="1440" y="70" font-size="19" text-anchor="end" class="mut">the deck your agents work on · self-hosted · MIT</text>
 
-  <!-- typed prompt -->
-  <text x="92" y="132" font-size="20">
-    <tspan class="green">$</tspan>
-    <tspan class="fg"><tspan class="t" style="animation-delay:.15s">t</tspan><tspan class="t" style="animation-delay:.25s">e</tspan><tspan class="t" style="animation-delay:.35s">r</tspan><tspan class="t" style="animation-delay:.45s">m</tspan><tspan class="t" style="animation-delay:.55s">d</tspan><tspan class="t" style="animation-delay:.65s">e</tspan><tspan class="t" style="animation-delay:.75s">c</tspan><tspan class="t" style="animation-delay:.85s">k</tspan><tspan class="t" style="animation-delay:1.0s"> </tspan><tspan class="t" style="animation-delay:1.1s">s</tspan><tspan class="t" style="animation-delay:1.2s">t</tspan><tspan class="t" style="animation-delay:1.3s">a</tspan><tspan class="t" style="animation-delay:1.4s">r</tspan><tspan class="t" style="animation-delay:1.5s">t</tspan></tspan>
-  </text>
+  <!-- LEFT: the terminal -->
+  <rect x="60" y="110" width="640" height="430" rx="12" fill="#1e1e1e" stroke="#3d3d3d" stroke-width="2"/>
+  <path d="M60 124 a12 12 0 0 1 12 -12 h616 a12 12 0 0 1 12 12 v24 h-640 z" fill="#282828"/>
+  <circle cx="86" cy="130" r="6" fill="#ff5f57"/><circle cx="107" cy="130" r="6" fill="#febc2e"/><circle cx="128" cy="130" r="6" fill="#28c840"/>
+  <text x="380" y="136" text-anchor="middle" font-size="14" class="mut">terminal — agent session</text>
 
-  <!-- wordmark -->
-  <text x="88" y="230" font-size="84" font-weight="bold">
-    <tspan fill="#ffffff">Term</tspan><tspan class="coral">Deck</tspan>
-  </text>
-  <rect class="cursor coral" x="500" y="164" width="34" height="72"/>
-
-  <!-- agent status -->
-  <g font-size="20">
-    <circle class="dot-run green" cx="100" cy="285" r="6"/>
-    <text x="120" y="292" class="fg">agent 1  coding      <tspan class="coral">src/search.ts:42</tspan></text>
-    <circle class="dot-you amber" cx="100" cy="322" r="6"/>
-    <text x="120" y="329" class="fg">agent 2  needs you   "ship the fix?"</text>
-    <circle class="dot-run green" cx="100" cy="359" r="6" style="animation-delay:.5s"/>
-    <text x="120" y="366" class="fg">agent 3  docs        report.md</text>
-    <circle cx="100" cy="396" r="6" fill="none" stroke="#9b9b9b" stroke-width="2"/>
-    <text x="120" y="403" class="mut">agent 4  idle        done · 2m ago</text>
+  <g font-size="19">
+    <text x="92" y="192"><tspan class="green">$</tspan> <tspan class="fg">claude "polish the report"</tspan></text>
+    <circle class="dot-run green" cx="100" cy="230" r="5"/>
+    <text x="116" y="237" class="mut">thinking · writing · running tests</text>
+    <text x="92" y="286" class="fg">wrote <tspan class="path-hot">report.md</tspan></text>
+    <rect class="path-under coral" x="163" y="292" width="107" height="2"/>
+    <text x="92" y="323" class="fg">fixed <tspan class="path-hot">src/search.ts:42</tspan></text>
+    <text x="92" y="372" class="mut">&gt; click a path, it renders on the deck</text>
+    <text x="92" y="470" font-size="19"><tspan class="green">$</tspan><tspan class="cursor fg"> ▍</tspan></text>
   </g>
 
-  <!-- features -->
-  <g font-size="17" text-anchor="end">
-    <text x="1108" y="292" class="mut feat" style="animation-delay:1.8s">click any path -&gt; rendered</text>
-    <text x="1108" y="326" class="mut feat" style="animation-delay:2.1s">tweak UI -&gt; send to agent</text>
-    <text x="1108" y="360" class="mut feat" style="animation-delay:2.4s">wiki · grid · canvas</text>
-    <text x="1108" y="394" class="mut feat" style="animation-delay:2.7s">self-hosted · MIT</text>
+  <!-- interchange arrows -->
+  <g fill="none" stroke-width="3">
+    <path class="flow" d="M705 260 C 745 260, 755 250, 795 250" stroke="#e13f5e"/>
+    <path class="flowb" d="M795 350 C 755 350, 745 340, 705 340" stroke="#4ec9a0"/>
+  </g>
+  <path d="M795 250 l-12 -7 v14 z" fill="#e13f5e"/>
+  <path d="M705 340 l12 -7 v14 z" fill="#4ec9a0"/>
+  <text x="750" y="232" font-size="14" text-anchor="middle" class="coral">click</text>
+  <text x="750" y="378" font-size="14" text-anchor="middle" class="green">tweak</text>
+
+  <!-- RIGHT: the deck (rendered doc) -->
+  <rect x="800" y="110" width="640" height="430" rx="12" fill="#1e1e1e" stroke="#3d3d3d" stroke-width="2"/>
+  <path d="M800 124 a12 12 0 0 1 12 -12 h616 a12 12 0 0 1 12 12 v24 h-640 z" fill="#282828"/>
+  <text x="1120" y="136" text-anchor="middle" font-size="14" class="mut">report.md — rendered</text>
+  <text x="1416" y="137" text-anchor="end" font-size="13" class="coral">TWEAK</text>
+
+  <!-- rendered document elements, appearing like a live render -->
+  <g>
+    <rect class="doc-el" x="836" y="172" width="300" height="22" rx="4" fill="#ffffff" style="animation-delay:.2s"/>
+    <rect class="doc-el" x="836" y="212" width="540" height="9" rx="4" fill="#6b6b6b" style="animation-delay:.5s"/>
+    <rect class="doc-el" x="836" y="232" width="500" height="9" rx="4" fill="#6b6b6b" style="animation-delay:.65s"/>
+    <rect class="doc-el" x="836" y="252" width="430" height="9" rx="4" fill="#6b6b6b" style="animation-delay:.8s"/>
+
+    <!-- table -->
+    <g class="doc-el" style="animation-delay:1.1s">
+      <rect x="836" y="285" width="380" height="26" rx="3" fill="#2c2c2c"/>
+      <rect x="836" y="313" width="380" height="22" fill="#242424"/>
+      <rect x="836" y="337" width="380" height="22" fill="#202020"/>
+      <line x1="962" y1="285" x2="962" y2="359" stroke="#3d3d3d" stroke-width="1.5"/>
+      <line x1="1088" y1="285" x2="1088" y2="359" stroke="#3d3d3d" stroke-width="1.5"/>
+      <rect x="848" y="294" width="70" height="8" rx="3" fill="#9b9b9b"/>
+      <rect x="974" y="294" width="70" height="8" rx="3" fill="#9b9b9b"/>
+      <rect x="1100" y="294" width="70" height="8" rx="3" fill="#9b9b9b"/>
+      <rect x="848" y="320" width="80" height="7" rx="3" fill="#565656"/>
+      <rect x="974" y="320" width="60" height="7" rx="3" fill="#4ec9a0"/>
+      <rect x="848" y="344" width="66" height="7" rx="3" fill="#565656"/>
+      <rect x="974" y="344" width="74" height="7" rx="3" fill="#e5b567"/>
+    </g>
+
+    <!-- mermaid-ish diagram -->
+    <g class="doc-el" style="animation-delay:1.5s">
+      <rect x="1250" y="285" width="82" height="34" rx="6" fill="none" stroke="#e13f5e" stroke-width="2"/>
+      <rect x="1250" y="357" width="82" height="34" rx="6" fill="none" stroke="#4ec9a0" stroke-width="2"/>
+      <line x1="1291" y1="319" x2="1291" y2="357" stroke="#9b9b9b" stroke-width="2"/>
+      <path d="M1291 357 l-6 -9 h12 z" fill="#9b9b9b"/>
+      <rect x="1264" y="298" width="54" height="7" rx="3" fill="#e13f5e"/>
+      <rect x="1264" y="370" width="54" height="7" rx="3" fill="#4ec9a0"/>
+    </g>
+
+    <!-- chart bars -->
+    <g class="doc-el" style="animation-delay:1.9s">
+      <rect x="836" y="470" width="46" height="-0" fill="#e13f5e"/>
+      <rect x="836" y="430" width="46" height="40" rx="3" fill="#e13f5e" opacity=".85"/>
+      <rect x="894" y="410" width="46" height="60" rx="3" fill="#e13f5e" opacity=".6"/>
+      <rect x="952" y="390" width="46" height="80" rx="3" fill="#e13f5e" opacity=".35"/>
+      <line x1="836" y1="472" x2="1080" y2="472" stroke="#3d3d3d" stroke-width="2"/>
+    </g>
+
+    <!-- picked element with tweak note -->
+    <g class="doc-el" style="animation-delay:2.4s">
+      <rect x="1160" y="424" width="216" height="48" rx="6" fill="none" stroke="#e13f5e" stroke-width="2" stroke-dasharray="6 5"/>
+      <circle cx="1164" cy="428" r="11" fill="#e13f5e"/>
+      <text x="1164" y="432" font-size="13" text-anchor="middle" fill="#ffffff">1</text>
+      <text x="1180" y="444" font-size="14" class="fg">"make this card wider"</text>
+      <text x="1180" y="463" font-size="13" class="mut">→ sent to agent 1</text>
+    </g>
   </g>
 
-  <text x="1108" y="425" font-size="17" text-anchor="end" class="coral">termdeck.huytieu.com<tspan class="cursor">▍</tspan></text>
+  <text x="60" y="578" font-size="17" class="mut">terminal on the left · everything it makes, rendered on the right</text>
+  <text x="1440" y="578" font-size="17" text-anchor="end" class="coral">termdeck.huytieu.com<tspan class="cursor">▍</tspan></text>
 </svg>
