@@ -9,6 +9,11 @@ allowBuilds:
   node-pty: true
   protobufjs: true
 
+minimumReleaseAgeExclude:
+  - deslop-js@0.8.1
+  - oxlint-plugin-react-doctor@0.8.1
+  - react-doctor@0.8.1
+
 onlyBuiltDependencies:
   - "@parcel/watcher"
   - "@google/genai"
@@ -22,7 +27,14 @@ onlyBuiltDependencies:
 overrides:
   vite: npm:@voidzero-dev/vite-plus-core@^0.2.2
   "@voidzero-dev/vite-plus-core": "^0.2.4"
+  # Pinned: 5.2.8 bundles Geist 1.7.0, which collapses coding ligatures to a
+  # single cell and breaks xterm rendering. Override locks the workspace to
+  # 5.2.7 (Geist 1.401, multi-cell ligatures) so `pnpm update` cannot drift
+  # it back. Upstream: vercel/geist-font#201.
+  "@fontsource/geist-mono": "5.2.7"
 
 patchedDependencies:
+  # Remove after the device-resolution renderer from xtermjs/xterm.js#5775 ships.
+  "@xterm/addon-image@0.10.0-beta.287": patches/@xterm__addon-image@0.10.0-beta.287.patch
   "@xterm/addon-webgl@0.20.0-beta.286": patches/@xterm__addon-webgl@0.20.0-beta.286.patch
   "node-pty@1.1.0": "patches/node-pty@1.1.0.patch"

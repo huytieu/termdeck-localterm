@@ -79,14 +79,14 @@ export const SourceView = ({
   const focusRef = useRef<HTMLDivElement | null>(null);
   const lines = content.split("\n");
   // Re-tokenize when the theme flips so syntax colors match light/dark.
-  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "dark");
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "dark" as const);
 
   useEffect(() => {
     let cancelled = false;
     setTokenLines(null);
     const langId = detectLangId(path);
     if (!langId) return;
-    void tokenizeDiffLines(path, content.split("\n"), langId).then((result) => {
+    void tokenizeDiffLines(path, content.split("\n"), langId, theme).then((result) => {
       if (!cancelled) setTokenLines(result);
     });
     return () => {

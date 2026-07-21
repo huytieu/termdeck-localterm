@@ -1,20 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type IPty } from "node-pty";
 import {
-  COLORTERM_VALUE,
+  ALT_SCREEN_FOREGROUND,
   DEFAULT_COLS,
   DEFAULT_ROWS,
   HOOKED_SHELL_NAMES,
-  LOCALTERM_STATE_DIRNAME,
-  LOCALTERM_VALUE,
   MAX_NOTIFICATION_LENGTH,
   MAX_PENDING_PARSE_BYTES,
-  PTY_ENV_DENYLIST,
-  SECRETS_SHIMS_DIRNAME,
   SESSION_SCROLLBACK_REPLAY_BYTES,
   TERM_TYPE,
 } from "./constants.js";
@@ -23,11 +19,10 @@ import {
 // output stream — doing so corrupts in-flight escape sequences from modern
 // TUIs (e.g. Cursor Agent / Claude Code use DECSET 2026 synchronized output
 // mode and any byte landing inside that frame breaks the parser state).
+import { buildPtyEnvironment } from "./build-pty-environment.js";
 import { ensureSpawnHelperExecutable } from "./ensure-spawn-helper-executable.js";
-import { ForegroundWatcher } from "./foreground-watcher.js";
 import { getDefaultShell } from "./default-shell.js";
-import { shimPathPrependLine } from "./secret-shims.js";
-import { shellPathForUserShell } from "./utils/shell-path.js";
+import { ShellHookBuilder } from "./shell-hook-builder.js";
 import type { SpawnPtyInput } from "./types.js";
 import { formatWorkingDirectoryTitle } from "./utils/format-working-directory-title.js";
 import { parseAltScreenFromChunk } from "./utils/parse-alt-screen.js";
@@ -35,8 +30,8 @@ import { parseOsc7FromChunk } from "./utils/parse-osc7.js";
 import { parseOscAutomationExitFromChunk } from "./utils/parse-osc-automation-exit.js";
 import { parseOscDirtyFromChunk } from "./utils/parse-osc-dirty.js";
 import { parseOscNotificationsFromChunk } from "./utils/parse-osc-notification.js";
+import { parseOscForegroundFromChunk } from "./utils/parse-osc-foreground.js";
 import { parseOscTitleFromChunk } from "./utils/parse-osc-title.js";
-import { confirmShellProcessName } from "./utils/shell-process-name.js";
 import { TerminalModeState } from "./utils/terminal-mode-state.js";
 import { terminalQueryResponder } from "./utils/terminal-query-responder.js";
 
@@ -75,16 +70,19 @@ export class Session extends EventEmitter<SessionEvents> {
 
   private readonly pty: IPty;
   private readonly shellName: string;
-  // Process names pty.process reports for the shell itself: the invoked
-  // basename and full path, plus the shell's alias name on macOS where they
-  // differ. On macOS node-pty reads kp_proc.p_comm, which an aliased shell
-  // overrides: /bin/sh is bash, so an idle /bin/sh reports "bash" — not the
-  // invoked basename "sh" — forever, which the original basename-only check
-  // misread as a running foreground program. The alias name is learned from
-  // the pty.process reading the first time the terminal's foreground group id
-  // (tpgid) confirms the shell is idle (see inferForegroundProcess), so it
-  // never absorbs a genuine program and never races a user-typed command.
-  private readonly shellProcessNames = new Set<string>();
+  // Foreground state from the shell hook (preexec/precmd) — the authoritative
+  // source. null = the shell is at its prompt (precmd emitted fg-idle); a
+  // string = a program is running (preexec emitted fg;<token>). Takes
+  // precedence over altScreenActive so a hooked shell's named program wins
+  // over the alt-screen fallback.
+  private foregroundFromHook: string | null = null;
+  // Whether a TUI is currently on the alternate screen (DECSET/DECRST 1049).
+  // The fallback foreground signal for shells without a preexec hook (sh/dash):
+  // a TUI entering the alt screen marks the session alive even without a named
+  // program, so a closed tab never reaps a running editor. A hooked shell's
+  // preexec names the program first, so this only fills the gap for unhooked
+  // shells (sh/dash).
+  private altScreenActive = false;
   private currentCols: number;
   private currentRows: number;
   private exited = false;
@@ -92,7 +90,7 @@ export class Session extends EventEmitter<SessionEvents> {
   private initialTitle = "";
   private lastEmittedTitle = "";
   private lastEmittedCwdValue = "";
-  private lastEmittedForegroundValue: string | null | undefined = undefined;
+  private lastEmittedForegroundValue: string | null = null;
   private pixelResizeSupported: boolean | null = null;
   private hookCleanupPaths: string[] = [];
   private pendingParse = "";
@@ -109,7 +107,6 @@ export class Session extends EventEmitter<SessionEvents> {
   // have scrolled out of the 256KB replay window — otherwise the wheel scrolls
   // xterm's scrollback instead of the TUI.
   private readonly modeState = new TerminalModeState();
-  private readonly foregroundWatcher: ForegroundWatcher;
   private readonly reportInitialCommandExit: boolean;
   private hasEmittedAutomationExit = false;
 
@@ -127,8 +124,6 @@ export class Session extends EventEmitter<SessionEvents> {
     ensureSpawnHelperExecutable();
     this.shell = input.shell ?? getDefaultShell();
     this.shellName = path.basename(this.shell);
-    this.shellProcessNames.add(this.shellName);
-    this.shellProcessNames.add(this.shell);
     this.cwd = input.cwd ?? resolveDefaultCwd();
     this.currentCols = input.cols ?? DEFAULT_COLS;
     this.currentRows = input.rows ?? DEFAULT_ROWS;
@@ -137,42 +132,14 @@ export class Session extends EventEmitter<SessionEvents> {
     this.reportInitialCommandExit = Boolean(input.initialCommand);
     this.shimsDir = input.shimsDir;
 
-    const env: Record<string, string> = {};
-    const denied = new Set(PTY_ENV_DENYLIST);
-    const isLocaltermPath = (value: string) => /localterm-(?:zdot|bash)-/.test(value);
-    // The daemon may inherit a stale ZDOTDIR / __LOCALTERM_ORIG_ZDOTDIR from
-    // its login-shell wrapper — the previous session set ZDOTDIR to a temp
-    // hook dir and the plist's `zsh -l -c` re-sources that hook .zshrc. Strip
-    // any value that points to a localterm temp dir; pass through a legitimate
-    // user-set ZDOTDIR (e.g. dotfiles managed via custom ZDOTDIR). ZDOTDIR
-    // takes priority over __LOCALTERM_ORIG_ZDOTDIR because it reflects the
-    // user's current environment.
-    const inheritedZdotdir = process.env.ZDOTDIR;
-    const inheritedOrigZdotdir = process.env.__LOCALTERM_ORIG_ZDOTDIR;
-    const userZdotdirFromEnv =
-      inheritedZdotdir && !isLocaltermPath(inheritedZdotdir)
-        ? inheritedZdotdir
-        : inheritedOrigZdotdir && !isLocaltermPath(inheritedOrigZdotdir)
-          ? inheritedOrigZdotdir
-          : undefined;
-    for (const [key, value] of Object.entries(process.env)) {
-      if (denied.has(key)) continue;
-      if (typeof value === "string") env[key] = value;
-    }
-    if (userZdotdirFromEnv) env.__LOCALTERM_ORIG_ZDOTDIR = userZdotdirFromEnv;
-    else delete env.__LOCALTERM_ORIG_ZDOTDIR;
-    // User shells bootstrap their own PATH via rc files; don't leak the daemon's.
-    env.PATH = shellPathForUserShell();
-    if (input.env) {
-      for (const [key, value] of Object.entries(input.env)) {
-        env[key] = value;
-      }
-    }
-    env.TERM = TERM_TYPE;
-    env.COLORTERM = COLORTERM_VALUE;
-    env.LOCALTERM = LOCALTERM_VALUE;
+    const env = buildPtyEnvironment({ input, sessionId: this.id });
 
-    const [shellArgs, shellEnv] = this.prepareOsc7Hook(this.shellName, env);
+    const shellHookBuilder = new ShellHookBuilder({
+      shimsDir: this.shimsDir,
+      reportInitialCommandExit: this.reportInitialCommandExit,
+    });
+    const [shellArgs, shellEnv] = shellHookBuilder.prepare(this.shellName, env);
+    this.hookCleanupPaths.push(...shellHookBuilder.hookCleanupPaths);
     if (shellEnv) {
       for (const [key, value] of Object.entries(shellEnv)) {
         env[key] = value;
@@ -202,15 +169,15 @@ export class Session extends EventEmitter<SessionEvents> {
     });
 
     this.pty.onData((data) => {
-      // Intercept DA1/DA2 identity queries: answer them from the cached xterm
-      // response instantly (in-process, no round-trip to xterm) and remove the
-      // request from the output so xterm never sees it and never responds.
+      // Intercept standalone DA1/DA2 identity queries: answer them from the
+      // cached xterm response instantly (in-process, no round-trip to xterm) and
+      // remove the request from the output so xterm never sees or answers it.
       // Without this the remote round-trip loses the race against a short read
       // timeout or a process exit, orphaning the response in the PTY stdin as
-      // typed text (e.g. `62;4;9;22c`). Cold cache: the request round-trips to
-      // xterm as today and the response is captured in write(). The cleaned
-      // output (request removed) is what clients and the scrollback see, so the
-      // replay never carries a stale DA request either.
+      // typed text (e.g. `62;4;9;22c`). Cold or mixed chunk: the request
+      // round-trips to xterm so earlier query replies retain wire order, and the
+      // response is captured in write(). Only intercepted standalone requests
+      // are removed from client output and scrollback.
       const { passthrough, responses } = terminalQueryResponder.interceptRequest(data);
       for (const response of responses) this.pty.write(response);
       this.onPtyOutput(passthrough);
@@ -228,12 +195,6 @@ export class Session extends EventEmitter<SessionEvents> {
     }
 
     this.emitInitialMetadata();
-    this.foregroundWatcher = new ForegroundWatcher(
-      () => this.inferForegroundProcess(),
-      (next) => this.handleForegroundChange(next),
-      () => !this.exited,
-    );
-    this.foregroundWatcher.start();
   }
 
   get pid(): number {
@@ -277,13 +238,12 @@ export class Session extends EventEmitter<SessionEvents> {
     return this.lastEmittedCwdValue;
   }
 
-  // Current foreground process name (or null at the shell prompt), snapshotted
-  // at attach time alongside cwd/title so a reattaching client re-syncs the
-  // favicon state the watcher won't re-emit (it dedups consecutive equal
-  // values). `undefined` is coerced to null for the protocol — only possible
-  // mid-construction before emitInitialMetadata() runs.
+  // Current foreground value (a program name, the alt-screen marker, or null
+  // at the shell prompt), snapshotted at attach time alongside cwd/title so a
+  // reattaching client re-syncs the favicon state the deduping emitter won't
+  // re-emit on its own.
   get lastEmittedForeground(): string | null {
-    return this.lastEmittedForegroundValue ?? null;
+    return this.lastEmittedForegroundValue;
   }
 
   // Force the session's title from the REST/CLI rename surface. The shell's
@@ -367,7 +327,6 @@ export class Session extends EventEmitter<SessionEvents> {
   dispose(): void {
     this.kill();
     this.exited = true;
-    this.foregroundWatcher.dispose();
     this.cleanUpHookFiles();
     this.removeAllListeners();
   }
@@ -377,12 +336,11 @@ export class Session extends EventEmitter<SessionEvents> {
   // bracketed paste, cursor hide) so a switch into a long-running TUI re-enters
   // the alt screen and re-enables mouse even when the TUI's mode-set sequences
   // have scrolled out of the 256KB window — otherwise the wheel scrolls xterm's
-  // scrollback instead of the TUI. DA1/DA2 identity requests never reach the
-  // ring buffer: the TerminalQueryResponder removes them at append time and
-  // answers them live, so the replay can't re-trigger their responses. Other
-  // stale query requests (DSR/OSC/DECRQM) do remain in the raw bytes; the server
-  // doesn't sanitize those (enumerating every query variant is unbounded), so
-  // the client writes the whole replay as one suppressed block on
+  // scrollback instead of the TUI. Warm standalone DA1/DA2 requests never reach
+  // the ring buffer: the TerminalQueryResponder removes and answers them live.
+  // Cold or mixed DA requests, like DSR/OSC/DECRQM queries, remain in the raw
+  // bytes because the server cannot reorder or exhaustively sanitize them. The
+  // client writes the whole replay as one suppressed block on
   // `replay-end`, dropping xterm's responses to any of them — a bounded fix
   // that covers any query, present or future. The join cost is paid here (read
   // time, cold switch path) not on the hot output path.
@@ -443,8 +401,13 @@ export class Session extends EventEmitter<SessionEvents> {
     }
 
     const altScreen = parseAltScreenFromChunk(combined);
-    if (altScreen !== null && !altScreen) {
-      this.foregroundWatcher.set(null);
+    if (altScreen !== null) {
+      this.handleAltScreenChange(altScreen);
+    }
+
+    const foregroundSignal = parseOscForegroundFromChunk(combined);
+    if (foregroundSignal !== undefined) {
+      this.handleForegroundChange(foregroundSignal);
     }
 
     const notifications = parseOscNotificationsFromChunk(combined);
@@ -479,216 +442,26 @@ export class Session extends EventEmitter<SessionEvents> {
     return tail.indexOf("\x07", 2) === -1 && tail.indexOf("\x1b\\", 2) === -1;
   }
 
-  private prepareOsc7Hook(
-    shellName: string,
-    env: Record<string, string>,
-  ): [string[], Record<string, string> | null] {
-    const hookId = `${process.pid}-${Date.now()}`;
-    switch (shellName) {
-      case "zsh": {
-        const hookDir = path.join(os.tmpdir(), `localterm-zdot-${hookId}`);
-        mkdirSync(hookDir, { recursive: true, mode: 0o700 });
-        this.hookCleanupPaths.push(hookDir);
-        const hookScript = this.zshOsc7ChpwdFunction();
-        const userZdotdir = env.__LOCALTERM_ORIG_ZDOTDIR || env.ZDOTDIR || os.homedir();
-        const shimsPrepend = shimPathPrependLine(
-          this.shimsDir ?? path.join(os.homedir(), LOCALTERM_STATE_DIRNAME, SECRETS_SHIMS_DIRNAME),
-        );
-        const escapedZdotdir = userZdotdir.replace(/'/g, "'\\''");
-        const lines = [
-          `source '${escapedZdotdir}/.zshenv' 2>/dev/null`,
-          '__localterm_saved_zdotdir="${ZDOTDIR}"',
-          `ZDOTDIR='${escapedZdotdir}'`,
-          // Source the zsh login file before .zshrc (matching `zsh -l`'s
-          // .zshenv → .zprofile → .zshrc order) so PATH/env a user set in
-          // .zprofile is visible in the interactive session. zsh users keep
-          // interactive setup in .zshrc, so cross-sourcing is rare here and a
-          // double-source risk is low (unlike bash's .profile→.bashrc).
-          `source '${escapedZdotdir}/.zprofile' 2>/dev/null`,
-          `source '${escapedZdotdir}/.zshrc' 2>/dev/null`,
-          'ZDOTDIR="${__localterm_saved_zdotdir}"',
-          // Prepend the secrets shims dir AFTER the user's .zshrc ran, so the
-          // shims reliably shadow the real binaries despite rc PATH
-          // manipulation (e.g. `export PATH=/opt/homebrew/bin:$PATH`). The line
-          // is a no-op when the shims dir is absent (feature not configured).
-          shimsPrepend,
-          // zsh's PROMPT_SP (on by default) prints the EOL mark (bold+reverse %
-          // by default — the "white-background %") AND a fill-to-end-of-line
-          // space burst before each prompt when the prior line had no trailing
-          // newline. localterm's precmd/chpwd hooks emit OSC sequences with no
-          // newline, so PROMPT_SP fires on every prompt and zle's redraw
-          // normally erases both. localterm resizes xterm before the server's
-          // PTY catches up (async over a high-latency relay), so during a shell
-          // redraw — and especially at spawn, where the PTY starts at the wide
-          // DEFAULT_COLS while the mobile xterm is still its narrow viewport —
-          // the mark and the fill spaces (sized for the wider PTY) wrap in the
-          // narrower xterm and zle's clear-to-end-of-screen erases from the
-          // wrapped line, leaving the mark as a stray `%` and the spaces as a
-          // blank line above the prompt. Emptying PROMPT_EOL_MARK only kills the
-          // visible mark; the fill spaces still wrap. Disabling PROMPT_SP kills
-          // both. The cost is the standard non-zsh behavior: a command whose
-          // output lacks a trailing newline gets the prompt on the same line
-          // instead of a fresh one — fine here, since the only unterminated
-          // output in this setup is localterm's own OSC hooks (invisible).
-          "unsetopt PROMPT_SP",
-          hookScript,
-          "chpwd_functions=(${chpwd_functions[@]} __localterm_osc7_chpwd)",
-          "__localterm_osc7_chpwd",
-          "__localterm_git_dirty() { printf '\\e]7777;git-dirty\\a'; }",
-          "precmd_functions=(${precmd_functions[@]} __localterm_git_dirty)",
-          ...(this.reportInitialCommandExit
-            ? [
-                ...this.automationExitHookFunctionLines("__localterm_automation_exit_precmd"),
-                "precmd_functions=(__localterm_automation_exit_precmd ${precmd_functions[@]})",
-              ]
-            : []),
-        ];
-        writeFileSync(path.join(hookDir, ".zshrc"), lines.join("\n") + "\n", {
-          mode: 0o600,
-        });
-        return [[], { ZDOTDIR: hookDir, __LOCALTERM_ORIG_ZDOTDIR: userZdotdir }];
-      }
-      case "bash": {
-        const hookDir = path.join(os.tmpdir(), `localterm-bash-${hookId}`);
-        mkdirSync(hookDir, { recursive: true, mode: 0o700 });
-        const hookPath = path.join(hookDir, "bashrc");
-        this.hookCleanupPaths.push(hookDir);
-        const hookScript = this.bashOsc7Function();
-        const shimsPrepend = shimPathPrependLine(
-          this.shimsDir ?? path.join(os.homedir(), LOCALTERM_STATE_DIRNAME, SECRETS_SHIMS_DIRNAME),
-        );
-        const lines = [
-          // Login-shell env (mimic `bash -l`): /etc/profile then the first
-          // existing login file. ~/.bashrc is sourced only when NO login file
-          // exists, so a login file that already sources .bashrc (the common
-          // Ubuntu .profile pattern: `if [ -n "$BASH_VERSION" ]; then . ~/.bashrc; fi`)
-          // doesn't get .bashrc twice — which would duplicate PATH prepends
-          // (Ubuntu's .profile adds $HOME/.local/bin and .bashrc adds $HOME/bin).
-          // The system interactive files /etc/bashrc + /etc/bash.bashrc stay
-          // (the original behavior) so macOS's /etc/bashrc prompt setup and
-          // Debian's /etc/bash.bashrc are preserved even with a login file.
-          "source /etc/profile 2>/dev/null",
-          "__localterm_login_loaded=0",
-          'for __localterm_f in ~/.bash_profile ~/.bash_login ~/.profile; do [ -f "$__localterm_f" ] && . "$__localterm_f" && __localterm_login_loaded=1 && break; done',
-          "source /etc/bashrc 2>/dev/null",
-          "source /etc/bash.bashrc 2>/dev/null",
-          '[ "$__localterm_login_loaded" != 1 ] && source ~/.bashrc 2>/dev/null',
-          // Prepend the secrets shims dir AFTER the user's rc ran (see the
-          // zsh case for why the ordering matters).
-          shimsPrepend,
-          hookScript,
-          'PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND};}__localterm_osc7_prompt;__localterm_git_dirty"',
-          "__localterm_osc7_prompt",
-          "__localterm_git_dirty() { printf '\\e]7777;git-dirty\\a'; }",
-          ...(this.reportInitialCommandExit
-            ? [
-                ...this.automationExitHookFunctionLines("__localterm_automation_exit_prompt"),
-                'PROMPT_COMMAND="__localterm_automation_exit_prompt${PROMPT_COMMAND:+;${PROMPT_COMMAND}}"',
-              ]
-            : []),
-        ];
-        writeFileSync(hookPath, lines.join("\n") + "\n", { mode: 0o600 });
-        return [["--rcfile", hookPath], null];
-      }
-      case "fish": {
-        // fish's `-C` / `--init-command` runs AFTER ~/.config/fish/config.fish
-        // and the conf.d snippets load, so the user's config (including
-        // conf.d PATH manipulation) runs first and the shims prepend below
-        // shadows it — see the zsh case for why the ordering matters. Unlike
-        // zsh/bash this needs no temp rcfile: -C injects the setup directly
-        // and the event-bound functions persist for the session.
-        const shimsDir =
-          this.shimsDir ?? path.join(os.homedir(), LOCALTERM_STATE_DIRNAME, SECRETS_SHIMS_DIRNAME);
-        // fish escapes a single quote inside single quotes as `\'` (not the
-        // `\''` POSIX idiom).
-        const escapedShimsDir = shimsDir.replace(/'/g, "\\'");
-        const shimsPrepend = `test -d '${escapedShimsDir}' && set -gx PATH '${escapedShimsDir}' $PATH`;
-        // The fish_prompt handler emits the git-dirty signal, and (when an
-        // initial command is staged) copies LOCALTERM_INITIAL_COMMAND into a
-        // local, clears the env var, evals the local, and emits the
-        // automation-exit OSC with the eval's $status. See
-        // automationExitHookFunctionLines for the security rationale (copy +
-        // unset before eval, PTY_ENV_DENYLIST) and why this runs the command
-        // instead of typing it into the PTY.
-        const lines = [
-          "function __localterm_osc7 --on-variable PWD",
-          "    printf '\\e]7;file://%s%s\\a' (hostname 2>/dev/null || echo localhost) $PWD",
-          "end",
-          "__localterm_osc7",
-          shimsPrepend,
-          "function __localterm_prompt_hook --on-event fish_prompt",
-          "    printf '\\e]7777;git-dirty\\a'",
-          ...(this.reportInitialCommandExit
-            ? [
-                '    if test -n "$LOCALTERM_INITIAL_COMMAND"',
-                "        set -l __localterm_initial_command $LOCALTERM_INITIAL_COMMAND",
-                "        set -e LOCALTERM_INITIAL_COMMAND",
-                "        printf '+ %s\\n' $__localterm_initial_command",
-                "        eval $__localterm_initial_command",
-                "        printf '\\e]7777;automation-exit;%d\\a' $status",
-                "    end",
-              ]
-            : []),
-          "end",
-        ];
-        return [["-C", lines.join("\n")], null];
-      }
-      default:
-        return [[], null];
-    }
-  }
-
-  // The initial command for a hooked shell (zsh/bash/fish) is run by this hook
-  // via `eval`, instead of being typed into the PTY — so it never goes through
-  // the line editor's typed-input path and can't race ECHO or double-echo. The
-  // command arrives through the LOCALTERM_INITIAL_COMMAND env var (set in the
-  // constructor). The hook copies it into a local and unsets the env var
-  // BEFORE eval, so the command string isn't inherited by child processes the
-  // command spawns and the hook runs once; then prints it (prefixed `+`),
-  // emits a git-dirty signal before the eval so the ambient overlay updates
-  // as the command begins (the regular __localterm_git_dirty runs after this
-  // hook in the prompt chain — without this the first git-dirty only fires
-  // once the command finishes), evals the local, and emits the
-  // automation-exit OSC with the eval's exit status. Prepended first in the
-  // prompt chain; unhooked shells don't reach here (they take the at-spawn
-  // PTY write).
-  // LOCALTERM_INITIAL_COMMAND is on PTY_ENV_DENYLIST so a stale or inherited
-  // value from the daemon env can't reach the hook — the constructor's set is
-  // the only source.
-  private automationExitHookFunctionLines(functionName: string): string[] {
-    return [
-      `${functionName}() {`,
-      '  if [ -n "${LOCALTERM_INITIAL_COMMAND:-}" ]; then',
-      "    local __localterm_command_exit __localterm_initial_command",
-      '    __localterm_initial_command="$LOCALTERM_INITIAL_COMMAND"',
-      "    unset LOCALTERM_INITIAL_COMMAND",
-      "    printf '+ %s\\n' \"$__localterm_initial_command\"",
-      "    printf '\\e]7777;git-dirty\\a'",
-      '    eval "$__localterm_initial_command"',
-      "    __localterm_command_exit=$?",
-      "    printf '\\e]7777;automation-exit;%d\\a' \"$__localterm_command_exit\"",
-      "  fi",
-      "}",
-    ];
-  }
-
-  private zshOsc7ChpwdFunction(): string {
-    return [
-      "__localterm_osc7_chpwd() {",
-      '  printf \'\\e]7;file://%s%s\\a\' "${HOSTNAME:-localhost}" "${PWD}"',
-      "}",
-    ].join("\n");
-  }
-
-  private bashOsc7Function(): string {
-    return [
-      "__localterm_osc7_prompt() {",
-      '  printf \'\\e]7;file://%s%s\\a\' "${HOSTNAME:-localhost}" "${PWD}"',
-      "}",
-    ].join("\n");
-  }
-
   private handleForegroundChange(next: string | null): void {
+    this.foregroundFromHook = next;
+    this.emitEffectiveForeground();
+  }
+
+  private handleAltScreenChange(entered: boolean): void {
+    this.altScreenActive = entered;
+    this.emitEffectiveForeground();
+  }
+
+  // Combine the hook signal (authoritative: a named program or idle) with the
+  // alt-screen fallback (a TUI is on screen but no hook named it), dedup against
+  // the last emitted value, and broadcast. The hook always wins — a hooked
+  // shell's preexec names the program before the TUI enters the alt screen, so
+  // the alt-screen marker only fills the gap for shells without a preexec hook
+  // (sh/dash). On the idle transition (a program exits and
+  // the shell returns to its prompt) the title reverts to the cwd-derived form.
+  private emitEffectiveForeground(): void {
+    const next = this.foregroundFromHook ?? (this.altScreenActive ? ALT_SCREEN_FOREGROUND : null);
+    if (next === this.lastEmittedForegroundValue) return;
     const hadForeground = this.lastEmittedForegroundValue != null;
     this.lastEmittedForegroundValue = next;
     this.emit("foreground", next);
@@ -699,39 +472,6 @@ export class Session extends EventEmitter<SessionEvents> {
         this.emit("title", cwdTitle);
       }
     }
-  }
-
-  private inferForegroundProcess(): string | null {
-    const raw = this.pty.process?.trim() ?? "";
-    if (!raw) return null;
-    if (this.shellProcessNames.has(raw)) return null;
-    // An unknown name is either the shell under an alias (idle /bin/sh reports
-    // "bash", not the invoked "sh") or a genuine foreground program. The
-    // terminal's foreground group id disambiguates without depending on the
-    // shell's proctitle timing: the shell is its own pgrp leader holding the
-    // terminal at idle (tpgid == pty.pid), a foreground program runs in its own
-    // group (tpgid != pty.pid). When tpgid confirms the shell is idle the current
-    // reading IS the shell's alias name — learn it (cached per shell path, see
-    // utils/shell-process-name.ts, so the sync ps runs at most once per aliased
-    // path) and report no foreground; otherwise the name is a real program,
-    // reported as foreground. The getter re-reads pty.process *after* the tpgid
-    // check so a short-lived program that exits between `raw`'s read and the ps
-    // read can't be cached as the shell's name (which would permanently hide
-    // every later run of that program, e.g. `node`/`pi`, as "idle"). macOS-only:
-    // Linux node-pty reads /proc/<pgrp>/cmdline (the invoked name, already in
-    // the set), so an unknown name there is just a foreground program.
-    if (process.platform === "darwin") {
-      const confirmed = confirmShellProcessName(
-        this.shell,
-        this.pty.pid,
-        () => this.pty.process?.trim() ?? "",
-      );
-      if (confirmed) {
-        this.shellProcessNames.add(confirmed);
-        if (confirmed === raw) return null;
-      }
-    }
-    return raw;
   }
 
   private cleanUpHookFiles(): void {

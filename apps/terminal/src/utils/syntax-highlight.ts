@@ -1,6 +1,6 @@
 import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
-import { currentTheme } from "@/lib/theme";
+import { SYNTAX_TOKEN_CACHE_MAX_FILES } from "@/lib/constants";
 
 export interface SyntaxToken {
   content: string;
@@ -11,6 +11,8 @@ export interface SyntaxToken {
 export interface SyntaxLine {
   tokens: readonly SyntaxToken[];
 }
+
+export type SyntaxHighlightColorScheme = "dark" | "light";
 
 const LANG_LOADERS: Record<string, () => Promise<unknown>> = {
   typescript: () => import("@shikijs/langs/typescript"),
@@ -98,16 +100,34 @@ const FILENAME_TO_LANG: Record<string, string> = {
   Makefile: "make",
 };
 
-// Syntax theme follows the app theme: a light shiki theme in light mode (so
-// tokens aren't washed out on a white background), dark-plus in dark mode.
-const THEME_IDS = { dark: "dark-plus", light: "github-light" } as const;
+const SYNTAX_THEME_IDS: Record<SyntaxHighlightColorScheme, string> = {
+  dark: "dark-plus",
+  light: "github-light",  // local: github-light reads better on the memo light theme
+};
 
 interface TokenCacheEntry {
   contentKey: string;
   result: readonly SyntaxLine[] | null;
 }
 
-const tokenCache = new Map<string, TokenCacheEntry>();
+const tokenCache = new Map<string, Map<SyntaxHighlightColorScheme, TokenCacheEntry>>();
+
+const storeCachedTokens = (
+  filePath: string,
+  colorScheme: SyntaxHighlightColorScheme,
+  entry: TokenCacheEntry,
+): void => {
+  const fileCache =
+    tokenCache.get(filePath) ?? new Map<SyntaxHighlightColorScheme, TokenCacheEntry>();
+  fileCache.set(colorScheme, entry);
+  tokenCache.delete(filePath);
+  tokenCache.set(filePath, fileCache);
+  while (tokenCache.size > SYNTAX_TOKEN_CACHE_MAX_FILES) {
+    const oldestFilePath = tokenCache.keys().next().value;
+    if (oldestFilePath === undefined) break;
+    tokenCache.delete(oldestFilePath);
+  }
+};
 
 export const detectLangId = (filePath: string): string | null => {
   const lastSlash = filePath.lastIndexOf("/");
@@ -137,16 +157,14 @@ const getHighlighter = () => {
   return highlighterPromise;
 };
 
-// Theme is part of the cache key so flipping light/dark re-tokenizes instead of
-// serving stale colors.
-const contentKey = (lines: readonly string[]): string =>
-  `${currentTheme()}\n${lines.join("\n")}`;
+const contentKey = (lines: readonly string[]): string => lines.join("\n");
 
 export const getCachedTokens = (
   filePath: string,
   lines: readonly string[],
+  colorScheme: SyntaxHighlightColorScheme,
 ): readonly SyntaxLine[] | null | undefined => {
-  const entry = tokenCache.get(filePath);
+  const entry = tokenCache.get(filePath)?.get(colorScheme);
   if (!entry) return undefined;
   if (entry.contentKey !== contentKey(lines)) return undefined;
   return entry.result;
@@ -156,13 +174,14 @@ export const tokenizeDiffLines = async (
   filePath: string,
   lines: readonly string[],
   langId: string,
+  colorScheme: SyntaxHighlightColorScheme,
 ): Promise<readonly SyntaxLine[] | null> => {
-  const cached = getCachedTokens(filePath, lines);
+  const cached = getCachedTokens(filePath, lines, colorScheme);
   if (cached !== undefined) return cached;
 
   const loader = LANG_LOADERS[langId];
   if (!loader) {
-    tokenCache.set(filePath, { contentKey: contentKey(lines), result: null });
+    storeCachedTokens(filePath, colorScheme, { contentKey: contentKey(lines), result: null });
     return null;
   }
 
@@ -179,7 +198,7 @@ export const tokenizeDiffLines = async (
     const code = lines.join("\n");
     const themedTokens = highlighter.codeToTokens(code, {
       lang: langId,
-      theme: THEME_IDS[currentTheme()],
+      theme: SYNTAX_THEME_IDS[colorScheme],
     });
 
     const result = themedTokens.tokens.map((line) => ({
@@ -190,10 +209,10 @@ export const tokenizeDiffLines = async (
       })),
     }));
 
-    tokenCache.set(filePath, { contentKey: contentKey(lines), result });
+    storeCachedTokens(filePath, colorScheme, { contentKey: contentKey(lines), result });
     return result;
   } catch {
-    tokenCache.set(filePath, { contentKey: contentKey(lines), result: null });
+    storeCachedTokens(filePath, colorScheme, { contentKey: contentKey(lines), result: null });
     return null;
   }
 };

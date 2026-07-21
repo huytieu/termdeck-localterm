@@ -1,17 +1,18 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { openWikiFile } from "@/hooks/use-shell";
 import { currentTheme, subscribeTheme } from "@/lib/theme";
 import { detectLangId, tokenizeDiffLines, type SyntaxLine } from "@/utils/syntax-highlight";
+import { isLikelyRelativePath } from "@/utils/is-likely-relative-path";
 
 // Fenced code block highlighted with the same shiki pipeline (github-light /
 // dark-plus) the source viewer uses. Only rendered in the file view (sourcePath
 // present); the streaming agent log keeps plain, lightweight code blocks.
 function ShikiCode({ code, lang, className }: { code: string; lang: string | null; className?: string }) {
   const [tokens, setTokens] = useState<readonly SyntaxLine[] | null>(null);
-  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "dark");
+  const theme = useSyncExternalStore(subscribeTheme, currentTheme, () => "dark" as const);
   useEffect(() => {
     const langId = lang ? detectLangId(`x.${lang}`) : null;
     if (!langId) {
@@ -19,7 +20,7 @@ function ShikiCode({ code, lang, className }: { code: string; lang: string | nul
       return;
     }
     let cancelled = false;
-    void tokenizeDiffLines(`md-fence.${lang}`, code.split("\n"), langId).then((r) => {
+    void tokenizeDiffLines(`md-fence.${lang}`, code.split("\n"), langId, theme).then((r) => {
       if (!cancelled) setTokens(r);
     });
     return () => {
@@ -109,7 +110,10 @@ const LINK_CLASS =
 /** Leading-emoji test for the callout paragraph branch. */
 const LEADING_EMOJI_RE = /^\p{Extended_Pictographic}/u;
 
-function makeComponents(sourcePath?: string): Components {
+function makeComponents(
+  sourcePath?: string,
+  onOpenFile?: (filePath: string) => void,
+): Components {
   return {
     // Real semantic heading tags (was a shared HEADING_CLASS <div> for all six
     // levels — CSS h1..h4 selectors couldn't match, so there was no visual
@@ -227,6 +231,19 @@ function makeComponents(sourcePath?: string): Components {
           </code>
         );
       }
+      // Inline code that reads as a repo-relative path with a preview handler
+      // wired (agent log / automation run views) opens the file preview.
+      if (onOpenFile && isLikelyRelativePath(text)) {
+        return (
+          <button
+            type="button"
+            onClick={() => onOpenFile(text)}
+            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.88em] text-foreground underline-offset-2 transition-colors hover:bg-muted/70 hover:underline"
+          >
+            {text}
+          </button>
+        );
+      }
       const color = colorValue(text);
       if (color) {
         return (
@@ -268,16 +285,29 @@ const logComponents = makeComponents();
 export const Markdown = ({
   children,
   sourcePath,
+  cwd,
+  onOpenFile,
 }: {
   children: string;
   sourcePath?: string;
-}) => (
-  <div className="whitespace-normal break-words">
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={sourcePath ? makeComponents(sourcePath) : logComponents}
-    >
-      {preprocessWikilinks(children)}
-    </ReactMarkdown>
-  </div>
-);
+  // When both are supplied, inline-code spans that look like repo-relative
+  // file paths render as clickable preview triggers instead of plain code.
+  cwd?: string;
+  onOpenFile?: (filePath: string) => void;
+}) => {
+  const linkable = cwd !== undefined && onOpenFile !== undefined;
+  const components = useMemo(
+    () =>
+      sourcePath || linkable
+        ? makeComponents(sourcePath, linkable ? onOpenFile : undefined)
+        : logComponents,
+    [sourcePath, linkable, onOpenFile],
+  );
+  return (
+    <div className="whitespace-normal break-words">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {preprocessWikilinks(children)}
+      </ReactMarkdown>
+    </div>
+  );
+};

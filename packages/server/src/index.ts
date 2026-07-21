@@ -49,13 +49,17 @@ import {
   FRIENDLY_HOSTNAME,
   GIT_DIRTY_THROTTLE_MS,
   GIT_MAX_REF_LENGTH,
+  HERDR_THEME_SYNC_DEBOUNCE_MS,
   HTTP_STATUS_ACCEPTED,
   HTTP_STATUS_BAD_GATEWAY,
   HTTP_STATUS_BAD_REQUEST,
   HTTP_STATUS_CONFLICT,
   HTTP_STATUS_CREATED,
   HTTP_STATUS_NOT_FOUND,
+  HTTP_STATUS_PAYLOAD_TOO_LARGE,
+  HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE,
   MAX_AUTOMATIONS,
+  MAX_IMAGE_UPLOAD_BYTES,
   MAX_PROCESSES,
   MAX_SECRETS,
   MS_PER_MINUTE,
@@ -68,6 +72,9 @@ import {
   AUTOMATION_AGENT_SESSIONS_DIRNAME,
   SERVER_STOP_GRACE_MS,
   SESSION_ID_QUERY_PARAM,
+  WORKSPACE_FILENAME,
+  WORKSPACE_RESTORE_SETTLE_MS,
+  WORKSPACE_SNAPSHOT_DEBOUNCE_MS,
   SESSION_ACTIVITY_WINDOW_MS,
   WINDOW_ID_QUERY_PARAM,
   FOLLOW_QUERY_PARAM,
@@ -86,6 +93,8 @@ import {
 } from "./constants.js";
 import { getDefaultShell, listKnownShells, resolveShellOverride } from "./default-shell.js";
 import { resolveWindowId } from "./utils/resolve-window-id.js";
+import { getHerdrConfigPaths } from "./utils/get-herdr-config-paths.js";
+import { isHerdrProcess } from "./utils/is-herdr-process.js";
 import { shellPathForUserShell } from "./utils/shell-path.js";
 import { openChromeInspect } from "./utils/open-chrome-inspect.js";
 import { readServerVersion } from "./utils/read-server-version.js";
@@ -105,10 +114,12 @@ import {
   type GitDiffOptions,
 } from "./git-diff.js";
 import { HeartbeatStore } from "./heartbeat-store.js";
+import { WorkspaceStore } from "./workspace-store.js";
 import { createDefaultSecretBackend, type SecretBackend } from "./secret-backend.js";
 import { SecretStore } from "./secret-store.js";
 import { ProcessStore } from "./process-store.js";
 import { ThemeStore } from "./theme-store.js";
+import { HerdrThemeSync } from "./herdr-theme-sync.js";
 import { FontStore } from "./font-store.js";
 import { parseImportedTheme } from "./theme-parser.js";
 import { isBuiltinThemeId, BUILTIN_THEME_IDS } from "./terminal-themes.js";
@@ -187,6 +198,9 @@ import { imageContentTypeFor } from "./utils/image-extensions.js";
 import { videoContentTypeFor } from "./utils/video-extensions.js";
 import { revealInFileManager } from "./utils/reveal-in-file-manager.js";
 import { Readable } from "node:stream";
+import { resolveTextAsset } from "./utils/resolve-text-asset.js";
+import { extensionForImageContentType } from "./utils/image-extensions.js";
+import { isValidPasteSessionId, writePastedImage } from "./utils/paste-image-store.js";
 import { sweepStaleWorktrees } from "./utils/worktree-sweep.js";
 import {
   readWorktreeIncludeFile,
@@ -456,6 +470,10 @@ interface DaemonContext {
   // the same reason as the CDP port.
   getGraceSeconds: () => number | null;
   applyGraceSeconds: (seconds: number | null) => number | null;
+  // Live workspace-restore toggle access for GET/PUT /api/config. Routed through
+  // ctx so buildApiRoutes can read/mutate the createServer-scoped store.
+  getWorkspaceRestore: () => boolean;
+  applyWorkspaceRestore: (enabled: boolean) => boolean;
   connectCdpNow: () => Promise<CdpConnectResult>;
   portsSnapshotProcesses: SnapshotProcesses;
   portsSnapshotListeners: SnapshotListeners;
@@ -558,6 +576,8 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     applyCdpPort,
     getGraceSeconds,
     applyGraceSeconds,
+    getWorkspaceRestore,
+    applyWorkspaceRestore,
     connectCdpNow,
     buildTabUrl,
     mintViewerCookie,
@@ -1677,6 +1697,84 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
       : context.json({ error: "reveal_failed" }, 500);
   });
 
+  // Text content for the agent-log file preview. Served as text/plain (never
+  // parsed as HTML) with a default-src 'none' CSP and no-store, so clicking a
+  // relative path in a transcript previews source/config safely. The same
+  // sanitizeDiffPath guard rejects absolute and ".." paths; resolveTextAsset
+  // adds containment, a byte cap, and a NUL-byte binary check.
+  api.get("/file/content", async (context) => {
+    const cwd = resolveCwdQuery(context.req.query("cwd"));
+    if (!cwd) return context.json({ error: "invalid_cwd" }, HTTP_STATUS_BAD_REQUEST);
+    const filePath = sanitizeDiffPath(context.req.query("path"));
+    if (!filePath) return context.json({ error: "invalid_path" }, HTTP_STATUS_BAD_REQUEST);
+    const asset = resolveTextAsset(cwd, filePath);
+    if (asset === null) return context.text("not found", HTTP_STATUS_NOT_FOUND);
+    if (!asset.ok) {
+      if (asset.reason === "too_large") {
+        return context.text("too large", HTTP_STATUS_PAYLOAD_TOO_LARGE);
+      }
+      return context.text("binary", HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE);
+    }
+    return new Response(asset.content, {
+      status: 200,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "content-disposition": "inline",
+        "content-security-policy": "default-src 'none'",
+        "cache-control": "no-store",
+      },
+    });
+  });
+
+  // POST /api/upload-image — a pasted or file-picked image from the PWA. The
+  // client uploads the Blob as multipart/form-data with the live session id;
+  // the daemon writes it into a session-scoped ephemeral temp dir and returns
+  // the absolute path, which the client pastes (shell-quoted) into the prompt.
+  // Session-scoped: the dir is reaped when the session is torn down (the tab
+  // closes, the shell exits, or the idle grace reaps it), so a pasted image
+  // lives only as long as the session that received it — never written into the
+  // user's project tree. The sid is sanitized to a single path component so a
+  // crafted ?sid can't escape the temp root; the image-type allowlist (no SVG /
+  // text) and the byte cap are the other guards.
+  api.post("/upload-image", async (context) => {
+    const declaredLength = Number(context.req.header("content-length") ?? 0);
+    if (declaredLength > MAX_IMAGE_UPLOAD_BYTES) {
+      return context.json({ error: "too_large" }, HTTP_STATUS_PAYLOAD_TOO_LARGE);
+    }
+    const sessionId = context.req.query(SESSION_ID_QUERY_PARAM);
+    if (!sessionId || !isValidPasteSessionId(sessionId)) {
+      return context.json({ error: "invalid_session" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    let form: Record<string, unknown> | null = null;
+    try {
+      form = (await context.req.parseBody()) as Record<string, unknown>;
+    } catch {
+      return context.json({ error: "invalid_body" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    const image = form?.image;
+    if (!(image instanceof File) || image.size === 0) {
+      return context.json({ error: "invalid_body" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    if (image.size > MAX_IMAGE_UPLOAD_BYTES) {
+      return context.json({ error: "too_large" }, HTTP_STATUS_PAYLOAD_TOO_LARGE);
+    }
+    const extension = extensionForImageContentType(image.type);
+    if (!extension) {
+      return context.json({ error: "unsupported_type" }, HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE);
+    }
+    let absolutePath: string;
+    try {
+      absolutePath = writePastedImage(
+        sessionId,
+        new Uint8Array(await image.arrayBuffer()),
+        extension,
+      );
+    } catch {
+      return context.json({ error: "write_failed" }, HTTP_STATUS_BAD_REQUEST);
+    }
+    return context.json({ path: absolutePath }, HTTP_STATUS_CREATED);
+  });
+
   const readJsonBody = async (context: { req: { json: () => Promise<unknown> } }) => {
     try {
       return await context.req.json();
@@ -2609,6 +2707,7 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
     context.json({
       cdpPort: getCdpPort(),
       graceSeconds: getGraceSeconds(),
+      workspaceRestore: getWorkspaceRestore(),
       defaultShell: getDefaultShell(),
       shells: listKnownShells(),
     }),
@@ -2622,6 +2721,10 @@ const buildApiRoutes = (ctx: DaemonContext): Hono => {
         parsed.data.graceSeconds === undefined
           ? getGraceSeconds()
           : applyGraceSeconds(parsed.data.graceSeconds),
+      workspaceRestore:
+        parsed.data.workspaceRestore === undefined
+          ? getWorkspaceRestore()
+          : applyWorkspaceRestore(parsed.data.workspaceRestore),
       defaultShell: getDefaultShell(),
       shells: listKnownShells(),
     });
@@ -2693,6 +2796,11 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
   const shimsDir = path.join(stateDirectory, SECRETS_SHIMS_DIRNAME);
   // One pi session file per thread-mode agent automation, resumed each fire.
   const agentSessionsDir = path.join(stateDirectory, AUTOMATION_AGENT_SESSIONS_DIRNAME);
+  let herdrThemeSync: HerdrThemeSync | null = null;
+  const refreshHerdrThemeSyncState = (): void => {
+    const hasHerdrForeground = [...registry.foregroundNames().values()].some(isHerdrProcess);
+    herdrThemeSync?.setActive(hasHerdrForeground);
+  };
   const registry = new SessionManager({
     shimsDir,
     getGraceMs: () => {
@@ -2702,8 +2810,17 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
     sendControl: safeSend,
     hooks: {
       onOutputActivity: () => caffeinateManager.noteOutputActivity(),
-      onSessionActivity: () => caffeinateManager.pokeAuto(),
-      onSessionEvent: (event, cwd) => sessionEventManager.onSessionEvent(event, cwd),
+      onSessionActivity: () => {
+        caffeinateManager.pokeAuto();
+        scheduleWorkspaceSnapshot();
+        refreshHerdrThemeSyncState();
+      },
+      onSessionEvent: (event, cwd) => {
+        sessionEventManager.onSessionEvent(event, cwd);
+        // A cwd change reshapes the workspace manifest (the tab's respawn cwd
+        // moves), so re-snapshot alongside the attach/detach-driven snapshot.
+        if (event === "cwd") scheduleWorkspaceSnapshot();
+      },
       onAutomationExit: (automationId, runId, exitCode, log) => {
         automationStore.updateRun(automationId, runId, {
           status: exitCode === 0 ? "completed" : "failed",
@@ -2792,6 +2909,7 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
     path.join(stateDirectory, "caffeinate.json"),
   );
   const worktreeConfigStore = new WorktreeConfigStore(stateDirectory);
+  const workspaceStore = new WorkspaceStore(path.join(stateDirectory, WORKSPACE_FILENAME));
   // Per-process secret injection: a backend (macOS Keychain on darwin) holds
   // secret values; a secret is an identity + the env var it exports
   // (~/.localterm/secrets.json, names + env var only — never values), and a
@@ -2857,6 +2975,7 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
     batteryProbe: options.caffeinateBatteryProbe,
     hasRecentOutput: (pids, withinMs) => registry.hasRecentOutput(pids, withinMs),
     hasPeerClient: () => registry.hasPeerClient(),
+    foregroundNames: () => registry.foregroundNames(),
   });
   // Open dev ports: the daemon reads the process tree (ps) and the listening
   // socket table (lsof) on demand while the ports modal is open. Both are
@@ -3046,6 +3165,25 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
       safeSend(clientSocket, payload);
     }
   };
+
+  herdrThemeSync = new HerdrThemeSync({
+    configPaths: getHerdrConfigPaths({
+      environment: process.env,
+      homeDirectory: os.homedir(),
+    }),
+    debounceMs: HERDR_THEME_SYNC_DEBOUNCE_MS,
+    onThemeChange: (themeId) => {
+      if (!isBuiltinThemeId(themeId) || themeStore.getActive() === themeId) return;
+      try {
+        themeStore.setActive(themeId);
+        broadcastThemes();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`unable to synchronize Herdr theme: ${message}`);
+      }
+    },
+  });
+  refreshHerdrThemeSyncState();
 
   // Push the full font state to every tab on any mutation (set/family/toggle/
   // migrate) so open terminals reflect a CLI or other-tab change instantly —
@@ -3325,6 +3463,12 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
     registry.rearmGrace();
     return next;
   };
+  // Persist + read the workspace-restore toggle. Read at restore time, so a
+  // `PUT /api/config` change takes effect on the next start (the restore runs
+  // once at startup, not live-reactively).
+  const getWorkspaceRestore = (): boolean => daemonConfigStore.getWorkspaceRestore();
+  const applyWorkspaceRestore = (enabled: boolean): boolean =>
+    daemonConfigStore.setWorkspaceRestore(enabled);
   // Explicit "Connect now" (Settings → Automation browser → Connect): drop any
   // live socket and await a fresh connect so the caller learns the outcome —
   // connected + which browser, or the error that explains a failure (e.g. a
@@ -3345,6 +3489,109 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
         connected: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    }
+  };
+
+  // Workspace restore: reopen the user's last tabs via CDP on start (a
+  // tmux-resurrect/herdr-style restore of the *layout*; the shells themselves
+  // don't survive a stop). The manifest is snapshotted to disk — debounced on
+  // attach/detach churn (scheduleWorkspaceSnapshot, hooked into onSessionActivity)
+  // and flushed on graceful stop — so a restart, graceful or a crash, can reopen
+  // the same tabs. Triggered once per (owner, windowId) after the first desktop
+  // tab pairs with CDP, on a quiet window so surviving tabs (a daemon restart
+  // with the browser left open) reattach and are counted before the deficit is
+  // opened. Excludes automation-run tabs and dormant shells (filtered in
+  // SessionManager.workspaceEntries), so only tabs that were actively open
+  // come back. Opt out via Settings → Sessions (config.json workspaceRestore).
+  let workspaceSnapshotTimer: NodeJS.Timeout | null = null;
+  const scheduleWorkspaceSnapshot = (): void => {
+    if (workspaceSnapshotTimer !== null) clearTimeout(workspaceSnapshotTimer);
+    const timer = setTimeout(() => {
+      workspaceSnapshotTimer = null;
+      workspaceStore.write(registry.workspaceEntries());
+    }, WORKSPACE_SNAPSHOT_DEBOUNCE_MS);
+    timer.unref?.();
+    workspaceSnapshotTimer = timer;
+  };
+  const flushWorkspaceSnapshot = (): void => {
+    if (workspaceSnapshotTimer !== null) {
+      clearTimeout(workspaceSnapshotTimer);
+      workspaceSnapshotTimer = null;
+    }
+    workspaceStore.write(registry.workspaceEntries());
+  };
+
+  const buildSpawnTabUrl = (cwd: string, shell: string): string => {
+    const url = new URL(localOrigin ?? publicOrigin ?? `http://${FRIENDLY_HOSTNAME}:${actualPort}`);
+    if (cwd) url.searchParams.set("cwd", cwd);
+    if (shell) url.searchParams.set("shell", shell);
+    return url.toString();
+  };
+
+  const restoredWorkspaceKeys = new Set<string>();
+  const workspaceRestoreTimers = new Map<string, NodeJS.Timeout>();
+  const scheduleWorkspaceRestore = (owner: SessionOwner, windowId: string): void => {
+    if (!windowId) return;
+    const key = `${owner ?? ""}\u0000${windowId}`;
+    if (restoredWorkspaceKeys.has(key)) return;
+    const existing = workspaceRestoreTimers.get(key);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      workspaceRestoreTimers.delete(key);
+      if (restoredWorkspaceKeys.has(key)) return;
+      restoredWorkspaceKeys.add(key);
+      void restoreWorkspace(owner, windowId);
+    }, WORKSPACE_RESTORE_SETTLE_MS);
+    timer.unref?.();
+    workspaceRestoreTimers.set(key, timer);
+  };
+  const restoreWorkspace = async (owner: SessionOwner, windowId: string): Promise<void> => {
+    if (!daemonConfigStore.getWorkspaceRestore()) return;
+    if (!cdpClient || !cdpClient.isConnected()) return;
+    const entry = workspaceStore
+      .read()
+      .find((candidate) => candidate.owner === owner && candidate.windowId === windowId);
+    if (!entry || entry.tabs.length === 0) return;
+    const manifest = entry.tabs;
+    const openCount = registry.attachedClientCount(owner, windowId);
+    if (openCount >= manifest.length) return;
+    if (openCount === 0) {
+      for (const tab of manifest) {
+        await cdpClient.openBackgroundTab(buildSpawnTabUrl(tab.cwd, tab.shell));
+      }
+      return;
+    }
+    if (openCount === 1) {
+      // Browser was fully closed; the lone bootstrap tab is repointed to the
+      // first restored shell (navigate-the-bootstrap) so the reopen lands
+      // exactly N tabs in the manifest's cwds instead of N−1 + one stray in
+      // the default directory.
+      const firstTargetId = [...wsToTargetId.entries()].find(([ws]) => {
+        const profile = registry.clientProfile(ws);
+        return profile !== null && profile.owner === owner && profile.windowId === windowId;
+      })?.[1];
+      if (firstTargetId) {
+        await cdpClient.navigateTab(
+          firstTargetId,
+          buildSpawnTabUrl(manifest[0].cwd, manifest[0].shell),
+        );
+      }
+      for (let index = 1; index < manifest.length; index++) {
+        await cdpClient.openBackgroundTab(
+          buildSpawnTabUrl(manifest[index].cwd, manifest[index].shell),
+        );
+      }
+      return;
+    }
+    // Partial survival (a daemon restart with some tabs left open): surviving
+    // tabs self-healed to their live cwds, so only the deficit is opened. Which
+    // manifest cwds the survivors cover can't be matched (their URLs carry the
+    // spawn cwd, stale after a `cd`), so the tail is opened as a best-effort
+    // placement — the count is exact, the cwd placement is approximate.
+    for (let index = openCount; index < manifest.length; index++) {
+      await cdpClient.openBackgroundTab(
+        buildSpawnTabUrl(manifest[index].cwd, manifest[index].shell),
+      );
     }
   };
 
@@ -3385,6 +3632,8 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
     applyCdpPort,
     getGraceSeconds,
     applyGraceSeconds,
+    getWorkspaceRestore,
+    applyWorkspaceRestore,
     broadcastThemes,
     broadcastFonts,
     connectCdpNow,
@@ -3636,6 +3885,8 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
           if (!parsed.success) return;
           if (parsed.data.type === "input") {
             registry.writeInput(ws, parsed.data.data);
+          } else if (parsed.data.type === "terminal-response") {
+            registry.writeTerminalResponse(ws, parsed.data.data);
           } else if (parsed.data.type === "resize") {
             registry.resize(
               ws,
@@ -3644,6 +3895,8 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
               parsed.data.pixelWidth,
               parsed.data.pixelHeight,
             );
+          } else if (parsed.data.type === "client-focus") {
+            registry.setClientFocus(ws, parsed.data.focused);
           } else if (parsed.data.type === "ready") {
             // Attach handshake: the client has the {type:"session"} frame and
             // says whether it wants the scrollback replay (a switch to a PTY
@@ -3675,7 +3928,15 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
             const token = parsed.data.token;
             if (token !== null) {
               const targetId = cdpClient?.findTargetIdForToken(token);
-              if (targetId) wsToTargetId.set(ws, targetId);
+              if (targetId) {
+                wsToTargetId.set(ws, targetId);
+                // A desktop tab just paired with CDP — arm a one-shot restore
+                // for its (owner, windowId) so missing workspace tabs reopen
+                // once the reconnection burst settles. Phone PWA tabs never pair
+                // (no debug port), so restore stays scoped to the desktop.
+                const profile = registry.clientProfile(ws);
+                if (profile) scheduleWorkspaceRestore(profile.owner, profile.windowId);
+              }
             }
             safeSend(ws, {
               type: "cdp-controlled",
@@ -3863,6 +4124,7 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
   }
 
   const stop = async () => {
+    flushWorkspaceSnapshot();
     automationScheduler.dispose();
     folderWatchManager.dispose();
     automationGitWatcher.dispose();
@@ -3870,6 +4132,7 @@ export const createServer = async (options: ServerOptions = {}): Promise<Running
     webhookTriggerManager.dispose();
     caffeinateManager.dispose();
     processActivityWatcher?.dispose();
+    herdrThemeSync?.dispose();
     cdpClient?.close();
     registry.disposeAll();
     // Forcibly tear down every WS first. node-pty + ws upgraded sockets

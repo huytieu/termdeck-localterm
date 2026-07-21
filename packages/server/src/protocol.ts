@@ -23,6 +23,7 @@ export {
   MAX_COLS,
   MAX_CONCURRENT_SESSIONS,
   MAX_CRON_EXPRESSION_LENGTH,
+  MAX_IMAGE_UPLOAD_BYTES,
   MAX_INPUT_BYTES,
   MAX_NOTIFICATION_LENGTH,
   MAX_OUTPUT_BYTES,
@@ -43,6 +44,8 @@ export {
   MAX_NAMED_KEYS_BYTES,
   WS_BACKPRESSURE_THRESHOLD_BYTES,
   WS_CLOSE_BACKPRESSURE,
+  WS_OUTBOUND_PAUSE_HIGH_WATER_BYTES,
+  WS_OUTPUT_CLIENT_QUEUE_MAX_BYTES,
   WS_CLOSE_CAPACITY_REACHED,
   WS_CLOSE_POLICY_VIOLATION,
   WS_READY_STATE_OPEN,
@@ -255,7 +258,7 @@ export type {
 } from "./types.js";
 export { compileSchedule, compileScheduleAll } from "./utils/compile-schedule.js";
 export type { BrowserCandidate, DetectedBrowser } from "./cdp/detect-chromium.js";
-export { isImagePath } from "./utils/image-extensions.js";
+export { extensionForImageContentType, isImagePath } from "./utils/image-extensions.js";
 export type { ServerError, ServerErrorCode, ServerErrorKind } from "./errors.js";
 export type {
   AuthSession,

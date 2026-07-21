@@ -1,10 +1,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { SettingsMenu } from "../../src/components/settings-menu";
+import { NumberStepper } from "../../src/components/number-stepper";
 import type { TerminalSessionInfo } from "../../src/lib/terminal-session-info";
 import type { TerminalTheme } from "../../src/lib/terminal-themes";
 import { TooltipProvider } from "../../src/components/ui/tooltip";
 import {
+  DEFAULT_MUTE_EMOJI_COLORS,
   DEFAULT_TERMINAL_CURSOR_BLINK,
   DEFAULT_TERMINAL_LOCAL_ECHO,
   DEFAULT_TERMINAL_LINE_HEIGHT,
@@ -31,6 +33,7 @@ interface SettingsMenuHarnessProps {
   initialThemeId?: string;
   initialFontId?: string;
   initialLigaturesEnabled?: boolean;
+  initialMuteEmojiColors?: boolean;
   initialDefaultCwd?: string;
   onThemeChange?: (id: string) => void;
   onThemePreview?: (id: string | null) => void;
@@ -57,9 +60,14 @@ interface SettingsMenuHarnessProps {
   onOpenInspect?: () => void;
   initialGraceSeconds?: number | null;
   onGraceSecondsChange?: (seconds: number | null) => void;
+  initialWorkspaceRestore?: boolean;
+  onWorkspaceRestoreChange?: (enabled: boolean) => void;
+  initialMobileResume?: boolean;
+  onMobileResumeChange?: (enabled: boolean) => void;
   onPaddingXChange?: (paddingX: number) => void;
   onPaddingYChange?: (paddingY: number) => void;
   onLigaturesEnabledChange?: (enabled: boolean) => void;
+  onMuteEmojiColorsChange?: (muted: boolean) => void;
   onDefaultCwdChange?: (cwd: string) => void;
   onDefaultShellChange?: (shell: string) => void;
   detectedDefaultShell?: string;
@@ -82,6 +90,7 @@ const renderSettingsMenu = ({
   initialThemeId = "vesper",
   initialFontId = "geist-mono",
   initialLigaturesEnabled = false,
+  initialMuteEmojiColors = DEFAULT_MUTE_EMOJI_COLORS,
   initialDefaultCwd = "",
   initialDefaultShell = "",
   onThemeChange = () => {},
@@ -109,9 +118,14 @@ const renderSettingsMenu = ({
   onOpenInspect = () => {},
   initialGraceSeconds = null,
   onGraceSecondsChange = () => {},
+  initialWorkspaceRestore = true,
+  onWorkspaceRestoreChange = () => {},
+  initialMobileResume = true,
+  onMobileResumeChange = () => {},
   onPaddingXChange = () => {},
   onPaddingYChange = () => {},
   onLigaturesEnabledChange = () => {},
+  onMuteEmojiColorsChange = () => {},
   onDefaultCwdChange = () => {},
   onDefaultShellChange = () => {},
   detectedDefaultShell = "",
@@ -139,6 +153,8 @@ const renderSettingsMenu = ({
         onNerdFontEnabledChange={() => {}}
         ligaturesEnabled={initialLigaturesEnabled}
         onLigaturesEnabledChange={onLigaturesEnabledChange}
+        muteEmojiColors={initialMuteEmojiColors}
+        onMuteEmojiColorsChange={onMuteEmojiColorsChange}
         fontSize={initialFontSize}
         onFontSizeChange={onFontSizeChange}
         lineHeight={initialLineHeight}
@@ -162,6 +178,10 @@ const renderSettingsMenu = ({
         onOpenInspect={onOpenInspect}
         graceSeconds={initialGraceSeconds}
         onGraceSecondsChange={onGraceSecondsChange}
+        workspaceRestore={initialWorkspaceRestore}
+        onWorkspaceRestoreChange={onWorkspaceRestoreChange}
+        mobileResume={initialMobileResume}
+        onMobileResumeChange={onMobileResumeChange}
         paddingX={0}
         onPaddingXChange={onPaddingXChange}
         paddingY={0}
@@ -385,6 +405,19 @@ describe("SettingsMenu ligatures switch", () => {
   });
 });
 
+describe("SettingsMenu mute emoji colors switch", () => {
+  it("calls onMuteEmojiColorsChange with the toggled value", () => {
+    const onMuteEmojiColorsChange = vi.fn();
+    renderSettingsMenu({ initialMuteEmojiColors: true, onMuteEmojiColorsChange });
+
+    fireEvent.click(screen.getByLabelText("terminal settings"));
+    fireEvent.click(screen.getByLabelText("toggle mute emoji colors"));
+
+    expect(onMuteEmojiColorsChange).toHaveBeenCalledTimes(1);
+    expect(onMuteEmojiColorsChange.mock.calls[0]?.[0]).toBe(false);
+  });
+});
+
 describe("SettingsMenu default launch directory", () => {
   it("renders the stored path in the Launch input", () => {
     renderSettingsMenu({ initialDefaultCwd: "/Users/tester/repo" });
@@ -441,13 +474,28 @@ describe("SettingsMenu pin-to-bottom-on-input switch", () => {
 });
 
 describe("NumberStepper drag scrubber (via the font size stepper)", () => {
+  // Mount NumberStepper directly instead of through the full SettingsMenu: the
+  // drag math is NumberStepper's own, and rendering the whole panel just to
+  // reach the slider is what timed the first drag test out under parallel load.
+  const renderFontSizeStepper = (value: number, onValueChange: (value: number) => void) =>
+    render(
+      <NumberStepper
+        value={value}
+        min={TERMINAL_FONT_SIZE_MIN_PX}
+        max={TERMINAL_FONT_SIZE_MAX_PX}
+        step={TERMINAL_FONT_SIZE_STEP_PX}
+        ariaLabel="terminal font size"
+        decrementAriaLabel="decrease font size"
+        incrementAriaLabel="increase font size"
+        onValueChange={onValueChange}
+      />,
+    );
+
   const findFontSizeSlider = () => screen.getByRole("slider", { name: "terminal font size" });
 
   it("dragging the value cell to the right increases the value by step per scrub-pixel-threshold", () => {
     const onFontSizeChange = vi.fn();
-    renderSettingsMenu({ initialFontSize: 13, onFontSizeChange });
-
-    fireEvent.click(screen.getByLabelText("terminal settings"));
+    renderFontSizeStepper(13, onFontSizeChange);
     const valueCell = findFontSizeSlider();
 
     fireEvent.pointerDown(valueCell, { clientX: 100, pointerId: 1, button: 0 });
@@ -459,9 +507,7 @@ describe("NumberStepper drag scrubber (via the font size stepper)", () => {
 
   it("dragging left decreases the value", () => {
     const onFontSizeChange = vi.fn();
-    renderSettingsMenu({ initialFontSize: 18, onFontSizeChange });
-
-    fireEvent.click(screen.getByLabelText("terminal settings"));
+    renderFontSizeStepper(18, onFontSizeChange);
     const valueCell = findFontSizeSlider();
 
     fireEvent.pointerDown(valueCell, { clientX: 200, pointerId: 1, button: 0 });
@@ -473,9 +519,7 @@ describe("NumberStepper drag scrubber (via the font size stepper)", () => {
 
   it("does not fire onValueChange while the pointer drift is below the scrub threshold", () => {
     const onFontSizeChange = vi.fn();
-    renderSettingsMenu({ initialFontSize: 13, onFontSizeChange });
-
-    fireEvent.click(screen.getByLabelText("terminal settings"));
+    renderFontSizeStepper(13, onFontSizeChange);
     const valueCell = findFontSizeSlider();
 
     fireEvent.pointerDown(valueCell, { clientX: 100, pointerId: 1, button: 0 });
@@ -487,9 +531,7 @@ describe("NumberStepper drag scrubber (via the font size stepper)", () => {
 
   it("clears drag state on pointerCancel so subsequent moves do not fire", () => {
     const onFontSizeChange = vi.fn();
-    renderSettingsMenu({ initialFontSize: 13, onFontSizeChange });
-
-    fireEvent.click(screen.getByLabelText("terminal settings"));
+    renderFontSizeStepper(13, onFontSizeChange);
     const valueCell = findFontSizeSlider();
 
     fireEvent.pointerDown(valueCell, { clientX: 100, pointerId: 1, button: 0 });

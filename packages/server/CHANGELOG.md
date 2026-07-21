@@ -1,5 +1,354 @@
 # localterm-server
 
+## 2.66.21
+
+## 2.66.20
+
+### Patch Changes
+
+- 771af2d: Default macOS PTYs to a UTF-8 locale when launchd provides none, preventing locale-sensitive clipboard tools from turning copied Unicode text into MacRoman mojibake.
+
+## 2.66.19
+
+## 2.66.18
+
+### Patch Changes
+
+- cf50d86: Bound Git, agent-session, WebSocket output, and compression work; share repository watchers across viewed sessions and skip viewerless Git metadata refreshes.
+
+## 2.66.17
+
+### Patch Changes
+
+- 71739d8: Stop detached PTY sessions from creating recursive Git watchers until a viewer attaches, and release the watcher when the final viewer detaches.
+
+## 2.66.16
+
+## 2.66.15
+
+## 2.66.14
+
+### Patch Changes
+
+- 9242023: Restore Kitty graphics detection for synchronized terminal probes, initialize Pi image capabilities before its cell-size query, and render inline images at device resolution on HiDPI displays.
+
+## 2.66.13
+
+## 2.66.12
+
+### Patch Changes
+
+- a031b1e: Hand shared PTY sizing to the most recently focused or interactive viewer instead of permanently constraining every client to the narrowest viewport.
+
+  A phone and desktop still share one physical PTY size, but focus, pointer activity, or input now transfers resize ownership. Returning to the desktop expands the PTY and sends SIGWINCH while the mobile client remains attached, allowing full-screen apps such as Herdr and tmux to redraw at desktop width. A passive wider viewer keeps the existing inactive-viewport mask until it takes control.
+
+## 2.66.11
+
+### Patch Changes
+
+- dbd8f95: Automatically synchronize compatible Herdr theme selections to Localterm.
+
+## 2.66.10
+
+### Patch Changes
+
+- 9932455: Improve pull request state contrast in the light-themed diff viewer and terminal toolbar while preserving dark-theme colors.
+
+## 2.66.9
+
+### Patch Changes
+
+- 8804b0e: Refactor terminal, automation, settings, diff, session, Git, CDP, caffeinate, and CLI internals into focused modules while preserving public APIs and runtime behavior.
+
+## 2.66.8
+
+## 2.66.7
+
+## 2.66.6
+
+## 2.66.5
+
+## 2.66.4
+
+## 2.66.3
+
+## 2.66.2
+
+### Patch Changes
+
+- e30c9b9: Keep fast local synchronized-output producers responsive by catching up queued frames without replaying a presentation delay for every stale frame. Collapse LocalTerm's ambient Git indicators to the slim actions handle while herdr is foregrounded and restore them when the overlay expands, keep worktree rows consistently sized with visible path and revision text, make the mobile action strip reliably scrollable and its keyboard flush with the background, route mobile taps to mouse-aware TUIs while retaining a visible-cursor gesture for opening the keyboard, select light or dark diff syntax highlighting from the actual built-in or custom theme background, keep automation status and agent transcript Markdown readable in either mode, and apply the selected terminal theme and font to LocalTerm chrome from the first render.
+
+## 2.66.1
+
+### Patch Changes
+
+- 14060e0: Improve large-grid terminal throughput without skipping synchronized frames.
+
+  Loopback viewers now keep PTY output raw instead of serially constructing a decompressor for every server batch, while remote viewers retain Brotli or gzip compression. The terminal scans DEC 2026 boundaries with native byte search and drains paced output through an indexed queue, and the server refreshes its trailing output timer instead of allocating and cancelling one for every PTY chunk.
+
+## 2.66.0
+
+### Minor Changes
+
+- bb08471: Add a default-on **Mute emoji colors** toggle under Settings → Font. Turning it off restores native full-color emoji over theme and ANSI cell backgrounds while ordinary text keeps the alpha-mask WebGL path, and the preference persists and synchronizes across browser tabs.
+
+## 2.65.1
+
+## 2.65.0
+
+### Minor Changes
+
+- a0ad3ab: Auto-dismiss Dia's "Allow debugging connection?" prompt on the daemon's CDP socket (macOS).
+
+  - Dia is the only Chromium browser that gates the debugging connection behind an
+    `Allow debugging connection?` prompt (Return dismisses it). When the daemon's
+    persistent CDP WebSocket is still CONNECTING past `CDP_AUTO_ALLOW_DELAY_MS`
+    (600ms — a live WS opens in ~100ms, so "still connecting at 600ms" means the
+    prompt is up), the daemon fires one Return at the Dia process via `osascript`
+    so the socket opens with no manual click. A no-op for every other browser and
+    off macOS; cleared on a fast handshake so it never fires unnecessarily.
+  - New `packages/server/src/utils/dismiss-dia-allow-prompt.ts` owns the osascript
+    call (one focused utility). `CdpClient.openSocket` arms the per-attempt dismiss
+    timer, gated on the candidate browser being Dia + macOS + `autoAllow` (on by
+    default). `autoAllow`/`autoAllowDelayMs`/`dismissDiaAllowPrompt`/`platform` are
+    injected via `CdpClientOptions` for deterministic tests; every connect/reconnect
+    inherits it.
+  - Needs macOS Accessibility for the `node` binary running the daemon; without it
+    the keystroke is dropped (`osascript` errors -25211, swallowed) and connect
+    waits on its timeout — no regression vs. the feature being off.
+
+## 2.64.0
+
+### Minor Changes
+
+- dca792f: Add a reusable design-token toast and move the pasted-image notice to the top.
+
+  - New `components/ui/toast.tsx` wraps `@base-ui/react/toast` in the app's design tokens, with kind-tinted status icons (spinner / check / alert) and the popover/modal enter–exit animation (fade + zoom + slide).
+  - The pasted-image toast now appears at the top of the terminal instead of above the on-screen keyboard, upserts in place via a stable toast id, and lets the toast manager own its timers (the manual setTimeout / unmount cleanup is gone).
+
+## 2.63.1
+
+### Patch Changes
+
+- 6dca6eb: Fix mobile multi-viewer and new-shell interactions.
+
+  - Coordinate xterm-generated terminal query replies so only the active viewer
+    answers the PTY, preventing duplicate OSC and DSR responses when a phone is
+    attached while preserving input from every viewer.
+  - Treat New shell as an explicit fresh spawn. Phones and tablets now reuse the
+    current terminal surface instead of opening a PWA window with browser chrome;
+    desktop continues opening a separate tab.
+
+## 2.63.0
+
+### Minor Changes
+
+- 338389c: Reopen your last workspace tabs on start, and resume your active shell on mobile.
+
+  - On daemon start, reopen the browser tabs you had open last — in the same
+    directories and shells — via the automation browser's CDP connection: a
+    tmux-resurrect/herdr-style restore of the workspace layout. The shells
+    themselves don't survive a stop, so only the arrangement comes back;
+    automation-run tabs and shells you'd closed are skipped. Opt out from
+    Settings → Sessions ("Reopen tabs on start").
+  - On phones and tablets, opening localterm attaches to your most recently
+    active shell instead of starting a new one, so you land on the build or
+    agent run you just started on another device. An explicit attach (a shared
+    session QR) always wins regardless. Opt out from Settings → Launch
+    ("Resume last shell on mobile").
+
+## 2.62.4
+
+### Patch Changes
+
+- 8cc0e9e: Lower input-to-display latency for synchronized terminal applications without changing Localterm's streaming throughput path.
+
+  The server now recognizes DEC 2026 synchronized-output completion across PTY chunk boundaries and flushes that complete redraw immediately, while unsynchronized applications retain the existing anti-flicker idle window. For small output that immediately follows terminal input, the WebGL client consumes xterm's already-pending render once instead of waiting for its animation frame; autonomous output, large frames, hidden tabs, DOM fallback, compression, backpressure, and alpha-mask rendering remain on their existing paths.
+
+## 2.62.3
+
+### Patch Changes
+
+- d472583: Forward held Ctrl+Tab chords to foreground terminal applications.
+
+  Ctrl+Tab and Ctrl+Shift+Tab now become legacy Tab and BackTab input while a foreground application owns the PTY, allowing prefix-driven multiplexers such as Herdr to cycle panes without the browser consuming the chord. Idle shells still defer modified Tab to the browser, and Cmd+Tab remains reserved for the operating system.
+
+## 2.62.2
+
+### Patch Changes
+
+- 5ec4541: Revert `@fontsource/geist-mono` to 5.2.7 and lock it with a pnpm workspace override.
+
+  A blanket `chore(deps): update all dependencies to latest` had bumped the exact
+  `5.2.7` pin back to `5.2.8`, which packages Geist 1.7.0. Geist 1.7.0 collapses
+  every coding ligature (`:=`, `=>`, `!=`, `==`, `->`, `-->`, `>=`, `<=`) to a
+  single cell under the `liga` feature; xterm.js's fixed-cell ligature model then
+  left-clips the ligature (the colon in `:=` vanishes) and shifts trailing glyphs
+  one cell left. 5.2.7 (Geist 1.401) emits each ligature as a multi-cell
+  substitution so xterm renders correctly.
+
+  The exact package.json pin alone was not enough — a wholesale `pnpm update -L`
+  rewrites the specifier. A new `overrides` entry in `pnpm-workspace.yaml` forces
+  `@fontsource/geist-mono` to `5.2.7` workspace-wide, so the lockfile resolves to
+  5.2.7 even if a future update rewrites the consumer range. `apps/terminal` stays
+  pinned exactly to `5.2.7` as well.
+
+  Upstream Geist 1.7.0 ligature regression: vercel/geist-font#201, #231.
+
+## 2.62.1
+
+### Patch Changes
+
+- 15ccea8: Update all dependencies to their latest versions, including TypeScript 7,
+  commander 15, @hono/node-server 2, hono 4.12, @vitejs/plugin-react 6,
+  open 11, zod 4.4, @base-ui/react 1.6, shiki 4.3, tailwindcss 4.3, and
+  React 19.2.x patch updates.
+
+## 2.62.0
+
+### Minor Changes
+
+- 23ab217: Improve the mobile terminal and on-screen keyboard experience.
+
+  The in-app keyboard now defaults to a compact 85% scale and can be customized from an Alt-key bottom-left swipe. Its settings include keyboard height, terminal font size and line spacing, haptics, key previews, and key repeat. A bottom-right swipe on Enter dismisses the keyboard.
+
+  On touch devices, the top-right ambient action overlay stays hidden while the keyboard is down so it cannot block an app underneath, then returns while the keyboard is visible.
+
+## 2.61.5
+
+### Patch Changes
+
+- a27061d: Drive foreground-process detection from shell hooks instead of polling
+  `pty.process`. zsh and fish emit OSC 7777 `fg;<token>` (preexec) and `fg-idle`
+  (precmd) via native hooks; bash uses a chained DEBUG-trap preexec (preserves
+  any user DEBUG trap) plus a precmd `fg-idle`; the initial-command-eval hook
+  also emits `fg;<token>` so worktree/automation tabs detect their program. The
+  alt-screen stream signal stays as a fallback for unhooked shells (sh/dash), so a
+  closed tab never reaps a running TUI. This removes the per-session 250ms
+  `pty.process` poll, the `ps -o tpgid` shell-alias learner, and the
+  `ForegroundWatcher` — eliminating the subprocess churn that kept syspolicyd
+  warm on macOS. Keep-awake's automatic mode now short-circuits the `ps`
+  process-tree walk when a session's hook-reported foreground name is itself a
+  trigger (the common case: the user runs vim/ffmpeg/etc. directly), falling
+  back to the walk only for child-process triggers (make -> ffmpeg) and
+  unhooked shells. Adds `harness/fish-hook/` (run.sh + run-bash.sh): container
+  e2e that run the real fish and bash hooks and assert the OSC sequences land.
+
+## 2.61.4
+
+### Patch Changes
+
+- 0ed0866: Mute desktop notifications on the tab already viewing the session.
+
+  The daemon fans each OSC 9 notification out to every connected tab. A tab already viewing the emitting session in the foreground can see the result on screen (e.g. pi finishing a turn), so it now skips the OS notification instead of duplicating what the user is watching. The check uses `document.hasFocus()` rather than `document.hidden` so a localterm window left visible behind another app still pings when focus leaves it.
+
+## 2.61.3
+
+### Patch Changes
+
+- 330a4f0: Prevent Android's system keyboard and the terminal on-screen keyboard from appearing together.
+
+  Touch terminals now keep xterm's helper textarea read-only with `inputMode="none"`, explicitly dismiss any active native IME before opening the in-app keyboard, and retire the in-app keyboard before a control or input outside the terminal takes focus. Other app inputs continue to use the system keyboard normally.
+
+## 2.61.2
+
+### Patch Changes
+
+- 6ec2da5: Make pasted images ephemeral and session-scoped; use a lucide corner icon for the
+  keyboard swipe.
+
+  A pasted or picked image is now written to a session-scoped temp dir under the
+  OS temp root (not the project cwd) and reaped when the session is torn down, so a
+  paste lives only as long as the session that received it. The Ctrl-key swipe's
+  corner hint is the lucide image icon (matching the toolbar button) instead of an
+  emoji.
+
+## 2.61.1
+
+### Patch Changes
+
+- 9e140df: Move image upload onto a Ctrl-key swipe instead of a dedicated keyboard key.
+
+  The image-upload affordance added a key to the on-screen keyboard's bottom
+  row, which threw off the layout. It now lives on a bottom-left slide of the
+  Ctrl key (the framed-picture corner), reusing the keyboard's existing slide
+  mechanic, so the bottom row keeps its original four-key shape.
+
+## 2.61.0
+
+### Minor Changes
+
+- 199fe7f: Preview repository files directly from automation logs and make macOS-style terminal editing shortcuts portable across shells and TUIs.
+
+  Backtick-wrapped relative file paths in automation output are now clickable. Images use the existing guarded asset route, while text files open in a new preview modal backed by a cwd-contained `/api/file/content` endpoint with a 1 MB limit and binary-file rejection.
+
+  Physical xterm input and the on-screen keyboard now share readline/pi-compatible editing sequences: Option or Control plus Left/Right moves by word, Command plus arrows moves to line boundaries, and Command plus Backspace deletes to the beginning of the line. Modifier-arrow input no longer leaks unbound xterm CSI tails such as `;3D` into default macOS bash prompts.
+
+## 2.60.0
+
+### Minor Changes
+
+- 5699423: Paste an image from the phone (or desktop clipboard) onto the terminal.
+
+  The PWA's input surface was strictly text: `terminal.paste(text)` into xterm's
+  off-screen textarea, with no `paste`/`drop` listener and no notion of a binary
+  blob, so a pasted screenshot or photo was silently dropped. The WebSocket
+  `input` message is a capped text string written straight to the PTY, and the
+  `@xterm/addon-image`/`-clipboard` addons are output/OSC-52 only — neither
+  touches input.
+
+  A new `POST /api/upload-image` route accepts a multipart image Blob (auth-gated
+  like the rest of `/api`, gated to a raster image-type allowlist that excludes
+  SVG, capped at 32 MB, with a cwd-containment guard), writes it into the
+  session's cwd as `pasted-<ts>-<id>.<ext>`, and returns the absolute path. The
+  client then pastes that path (shell-quoted) into the prompt via the existing
+  bracketed-paste pipeline, so it lands without executing and the user can pipe
+  it to a viewer, hand it to an agent, etc.
+
+  Entry points: an attach button in the action toolbar (phone/tablet) and an
+  image key on the on-screen keyboard both open the system photo/file picker —
+  the reliable cross-platform path, since iOS Safari blocks clipboard image
+  reads and mobile paste into the hidden textarea is unreliable. On desktop,
+  Ctrl/Cmd+V and drag-drop onto the terminal are handled by capture-phase
+  `paste`/`drop` listeners that intercept an image paste before xterm reads the
+  clipboard's empty text representation (text pastes fall through untouched). A
+  transient toast reports the upload and any failure.
+
+  The Android share-sheet `share_target` (manifest + service-worker stash +
+  cold-start cwd handoff) is intentionally deferred to a focused follow-up; the
+  attach button already covers the "get an image from my phone onto the terminal"
+  intent on both Android and iPhone.
+
+## 2.59.2
+
+## 2.59.1
+
+## 2.59.0
+
+### Minor Changes
+
+- a4f052e: Add `localterm session current` — a single self-reference call that resolves
+  the localterm session the calling process is running in, so an agent inside a
+  PTY can get its own context (id, cwd, title, state, attached-tab count) without
+  scanning `session ls` and guessing which row is its own.
+
+  The daemon now injects `LOCALTERM_SESSION_ID` into every PTY's env at spawn
+  (inherited by all child processes), so the id is always locally available:
+  `echo "$LOCALTERM_SESSION_ID"` reads it with no daemon call, and
+  `localterm session current` (or `--json`) resolves it against
+  `GET /api/sessions/:id` for the full live session object. It degrades to the
+  bare id when the daemon is unreachable, and reports and exits non-zero when
+  not running inside a localterm PTY or when the env id isn't a live session.
+
+  - Server: stamp `LOCALTERM_SESSION_ID` on every spawned PTY; add it to the
+    `PTY_ENV_DENYLIST` so a daemon spawned inside a tab can't leak its own.
+  - CLI: `localterm session current [--json]`, reusing the existing
+    `GET /api/sessions/:id` (no new endpoint).
+  - Docs: the localterm skill and the sessions/exec reference cover the env var,
+    the command, and the degrade/error semantics.
+
+## 2.58.1
+
 ## 2.58.0
 
 ### Minor Changes

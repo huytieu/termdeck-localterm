@@ -2,11 +2,14 @@ import kleur from "kleur";
 import { writeFile } from "node:fs/promises";
 import open from "open";
 import {
-  daemonBaseUrl,
-  daemonFetch,
-  reportApiError,
-  reportDaemonDown,
-} from "../utils/daemon-api.js";
+  MILLISECONDS_PER_SECOND,
+  SESSION_MAX_EXIT_CODE,
+  SESSION_SHORT_ID_LENGTH,
+  SESSION_TIMEOUT_EXIT_CODE,
+} from "../constants.js";
+import { daemonBaseUrl, daemonFetch, reportDaemonDown } from "../utils/daemon-api.js";
+import { shortSessionId } from "../utils/short-session-id.js";
+import { fetchSessionApi } from "./session-api.js";
 import { resolveDaemonUrl } from "../utils/portless.js";
 import { readPort } from "../state.js";
 
@@ -31,29 +34,6 @@ interface ExecResult {
   truncated: boolean;
   durationMs: number;
 }
-
-const MAX_EXIT_CODE = 255;
-const TIMEOUT_EXIT_CODE = 124;
-
-const fetchOrReport = async (path: string, init: RequestInit): Promise<Response | null> => {
-  let base: string;
-  try {
-    base = daemonBaseUrl();
-  } catch {
-    reportDaemonDown();
-    process.exitCode = 1;
-    return null;
-  }
-  const response = await daemonFetch(`${base}${path}`, init);
-  if (!response.ok) {
-    reportApiError(response.status, await response.text());
-    process.exitCode = 1;
-    return null;
-  }
-  return response;
-};
-
-const shortId = (id: string): string => id.slice(0, 8);
 
 const stateColor = (state: string): string => {
   switch (state) {
@@ -115,7 +95,7 @@ const unescapeKeys = (raw: string): string => {
   return result;
 };
 
-const secondsToMs = (seconds: number): number => seconds * 1000;
+const secondsToMs = (seconds: number): number => seconds * MILLISECONDS_PER_SECOND;
 
 const renderExecResult = (result: ExecResult, json: boolean): void => {
   if (json) {
@@ -124,19 +104,24 @@ const renderExecResult = (result: ExecResult, json: boolean): void => {
   }
   if (result.output) process.stdout.write(result.output);
   if (result.timedOut) {
-    console.error(kleur.yellow(`\n[timed out after ${Math.round(result.durationMs / 1000)}s]`));
-    process.exitCode = TIMEOUT_EXIT_CODE;
+    console.error(
+      kleur.yellow(
+        `\n[timed out after ${Math.round(result.durationMs / MILLISECONDS_PER_SECOND)}s]`,
+      ),
+    );
+    process.exitCode = SESSION_TIMEOUT_EXIT_CODE;
     return;
   }
   if (result.truncated) console.error(kleur.dim("\n[output truncated]"));
-  process.exitCode = result.exitCode === null ? 1 : Math.min(result.exitCode, MAX_EXIT_CODE);
+  process.exitCode =
+    result.exitCode === null ? 1 : Math.min(result.exitCode, SESSION_MAX_EXIT_CODE);
 };
 
 // `localterm session ls [--json]` — every live PTY (attached, dormant, or
 // programmatic/pinned). The `pinned` column marks REST-created sessions exempt
 // from idle reap.
 const runList = async (options: { json: boolean }): Promise<void> => {
-  const response = await fetchOrReport("/sessions", {});
+  const response = await fetchSessionApi("/sessions", {});
   if (!response) return;
   const body = (await response.json()) as { sessions: SessionListItem[] };
   if (options.json) {
@@ -147,7 +132,7 @@ const runList = async (options: { json: boolean }): Promise<void> => {
     console.log(kleur.dim("no sessions. open a tab, or `localterm session new`."));
     return;
   }
-  const idWidth = 8;
+  const idWidth = SESSION_SHORT_ID_LENGTH;
   console.log(
     `${"ID".padEnd(idWidth)}  ${"PID".padStart(7)}  STATE        PIN  C  SHELL       CWD / TITLE`,
   );
@@ -157,9 +142,66 @@ const runList = async (options: { json: boolean }): Promise<void> => {
   for (const session of body.sessions) {
     const pin = session.pinned ? kleur.yellow("●") : kleur.dim("·");
     console.log(
-      `${kleur.cyan(shortId(session.id).padEnd(idWidth))}  ${String(session.pid).padStart(7)}  ${stateColor(session.state).padEnd(12)}  ${pin}  ${String(session.clients).padStart(1)}  ${session.shellName.padEnd(10)}  ${kleur.dim(session.cwd)} ${kleur.dim(`· ${session.title}`)}`,
+      `${kleur.cyan(shortSessionId(session.id).padEnd(idWidth))}  ${String(session.pid).padStart(7)}  ${stateColor(session.state).padEnd(12)}  ${pin}  ${String(session.clients).padStart(1)}  ${session.shellName.padEnd(10)}  ${kleur.dim(session.cwd)} ${kleur.dim(`· ${session.title}`)}`,
     );
   }
+};
+
+// `localterm session current [--json]` — self-reference: the id of the localterm
+// session this process is running in. The daemon injects LOCALTERM_SESSION_ID
+// into every PTY's env at spawn (inherited by all child processes), so a call
+// inside a tab resolves to its own session without scanning `session ls`.
+// Degrades to the bare id when the daemon is down; a non-live id (stale/spoofed
+// env) is reported and exits 1.
+const runCurrent = async (options: { json: boolean }): Promise<void> => {
+  const id = process.env.LOCALTERM_SESSION_ID;
+  if (!id) {
+    if (options.json) {
+      console.log(JSON.stringify({ error: "not_in_session" }));
+    } else {
+      console.log(kleur.red("✗ not running inside a localterm session"));
+      console.log(
+        kleur.dim("  env.LOCALTERM_SESSION_ID is set when a shell is spawned in a localterm PTY"),
+      );
+    }
+    process.exitCode = 1;
+    return;
+  }
+  let response: Response | null;
+  try {
+    const base = daemonBaseUrl();
+    response = await daemonFetch(`${base}/sessions/${encodeURIComponent(id)}`);
+  } catch {
+    response = null;
+  }
+  if (response === null) {
+    if (options.json) {
+      console.log(JSON.stringify({ id }));
+    } else {
+      console.log(`${kleur.cyan(shortSessionId(id))}  ${kleur.dim("(daemon unreachable)")}`);
+      console.log(kleur.dim(`  ${id}`));
+    }
+    return;
+  }
+  if (!response.ok) {
+    if (options.json) {
+      console.log(JSON.stringify({ id, live: false }));
+    } else {
+      console.log(`${kleur.cyan(shortSessionId(id))}  ${kleur.red("(not a live session)")}`);
+      console.log(kleur.dim(`  ${id}`));
+    }
+    process.exitCode = 1;
+    return;
+  }
+  const body = (await response.json()) as { session: SessionListItem };
+  const session = body.session;
+  if (options.json) {
+    console.log(JSON.stringify(session));
+    return;
+  }
+  console.log(
+    `${kleur.green("✓")} ${kleur.cyan(shortSessionId(session.id))}  ${session.shellName}  ${kleur.dim(session.cwd)}  ${stateColor(session.state)}  ${kleur.dim(`· ${session.clients} client(s)`)}`,
+  );
 };
 
 // `localterm session new` — spawn a detached PTY. Pinned by default so an
@@ -175,7 +217,7 @@ const runNew = async (options: {
   pin: boolean;
   json: boolean;
 }): Promise<void> => {
-  const response = await fetchOrReport("/sessions", {
+  const response = await fetchSessionApi("/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -194,7 +236,9 @@ const runNew = async (options: {
     console.log(JSON.stringify(body.session));
     return;
   }
-  console.log(kleur.green(`✓ session ${shortId(body.session.id)} (${body.session.shellName})`));
+  console.log(
+    kleur.green(`✓ session ${shortSessionId(body.session.id)} (${body.session.shellName})`),
+  );
   console.log(kleur.dim(`  cwd: ${body.session.cwd}`));
   console.log(
     kleur.dim(
@@ -205,11 +249,11 @@ const runNew = async (options: {
 
 // `localterm session kill <id>` — tear down the PTY (and its shell).
 const runKill = async (id: string): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!response) return;
-  console.log(kleur.green(`✓ killed session ${shortId(id)}`));
+  console.log(kleur.green(`✓ killed session ${shortSessionId(id)}`));
 };
 
 // `localterm session send-keys <id> <keys>` — write raw input to a session.
@@ -217,13 +261,13 @@ const runKill = async (id: string): Promise<void> => {
 // blocking command+output+exit in one call, use `localterm session exec`.
 const runSendKeys = async (id: string, keys: string): Promise<void> => {
   const data = unescapeKeys(keys);
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/input`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}/input`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ data }),
   });
   if (!response) return;
-  console.log(kleur.green(`✓ sent ${data.length} byte(s) to ${shortId(id)}`));
+  console.log(kleur.green(`✓ sent ${data.length} byte(s) to ${shortSessionId(id)}`));
 };
 
 // `localterm session capture <id> [--lines N] [--png -o file] [--json]` — the
@@ -237,7 +281,7 @@ const runCapture = async (
   if (options.png) {
     const params = new URLSearchParams({ format: "png" });
     if (options.lines) params.set("lines", String(options.lines));
-    const response = await fetchOrReport(
+    const response = await fetchSessionApi(
       `/sessions/${encodeURIComponent(id)}/pane?${params.toString()}`,
       {},
     );
@@ -254,7 +298,7 @@ const runCapture = async (
     return;
   }
   const query = options.lines ? `?lines=${options.lines}` : "";
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/pane${query}`, {});
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}/pane${query}`, {});
   if (!response) return;
   const body = (await response.json()) as { text: string };
   if (options.json) {
@@ -270,13 +314,13 @@ const runCapture = async (
 // bytes over the same /input route.
 const runPress = async (id: string, keys: string[]): Promise<void> => {
   const data = keys.join(" ");
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/input`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}/input`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ data, named: true }),
   });
   if (!response) return;
-  console.log(kleur.green(`✓ pressed ${kleur.dim(JSON.stringify(data))} on ${shortId(id)}`));
+  console.log(kleur.green(`✓ pressed ${kleur.dim(JSON.stringify(data))} on ${shortSessionId(id)}`));
 };
 
 interface WaitResult {
@@ -311,7 +355,7 @@ const runWait = async (
     if (options.idleMs !== undefined) body.idleMs = options.idleMs;
   }
   if (options.timeout) body.timeoutMs = secondsToMs(options.timeout);
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/wait`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}/wait`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -337,7 +381,7 @@ const runExec = async (
   command: string,
   options: { timeout?: number; json: boolean },
 ): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/exec`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}/exec`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -352,36 +396,36 @@ const runExec = async (
 
 // `localterm session resize <id> --cols N --rows N`.
 const runResize = async (id: string, options: { cols: number; rows: number }): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/resize`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}/resize`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ cols: options.cols, rows: options.rows }),
   });
   if (!response) return;
-  console.log(kleur.green(`✓ resized ${shortId(id)} → ${options.cols}×${options.rows}`));
+  console.log(kleur.green(`✓ resized ${shortSessionId(id)} → ${options.cols}×${options.rows}`));
 };
 
 // `localterm session rename <id> <name>` — set the title (the shell may
 // overwrite it on its next title/cwd change).
 const runRename = async (id: string, name: string): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name }),
   });
   if (!response) return;
-  console.log(kleur.green(`✓ renamed ${shortId(id)} → ${name}`));
+  console.log(kleur.green(`✓ renamed ${shortSessionId(id)} → ${name}`));
 };
 
 // `localterm session pin <id>` / `unpin <id>` — toggle idle-reap exemption.
 const runSetPin = async (id: string, pinned: boolean): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}`, {
+  const response = await fetchSessionApi(`/sessions/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ pinned }),
   });
   if (!response) return;
-  console.log(kleur.green(`✓ ${pinned ? "pinned" : "unpinned"} ${shortId(id)}`));
+  console.log(kleur.green(`✓ ${pinned ? "pinned" : "unpinned"} ${shortSessionId(id)}`));
 };
 
 // `localterm exec [--cwd] [--timeout s] [--json] <command>` — one-shot: spawn a
@@ -398,7 +442,7 @@ const runOneShotExecImpl = async (
     json: boolean;
   },
 ): Promise<void> => {
-  const response = await fetchOrReport("/exec", {
+  const response = await fetchSessionApi("/exec", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -418,7 +462,12 @@ const runOneShotExecImpl = async (
 // `localterm session attach <id>` — open a browser tab onto a live PTY by id.
 // No REST needed (attaching is the browser's job); this just resolves the
 // daemon's surface URL and opens it with `?sid=` so the WS attaches to the
-// existing shell instead of spawning a fresh one.
+// existing shell instead of spawning a fresh one. Opens at the daemon-local
+// surface (`localUrl`: portless https://localterm.localhost, else loopback)
+// for the same reason automation run tabs do — `session attach` opens in the
+// daemon's own browser, where a flapping `tailscale serve` (laptop wake, DERP
+// relay, cert renewal) would fail the tab load, so it never rides the tailnet
+// even when `resolveDaemonUrl` picks the tailnet URL as the remote `url`.
 const runAttach = async (id: string): Promise<void> => {
   const port = readPort();
   if (!port) {
@@ -427,154 +476,14 @@ const runAttach = async (id: string): Promise<void> => {
     return;
   }
   const resolved = await resolveDaemonUrl(port);
-  const url = new URL(resolved.url);
+  const url = new URL(resolved.localUrl ?? resolved.url);
   url.searchParams.set("sid", id);
   await open(url.href);
-  console.log(kleur.green(`✓ opening ${shortId(id)} at ${url.href}`));
-};
-
-interface MouseResult {
-  ok: boolean;
-  mode: "cdp" | "sgr";
-  col: number | null;
-  row: number | null;
-  text: string | null;
-  reason: string | null;
-}
-
-interface MouseState {
-  enabled: boolean;
-  cols: number;
-  rows: number;
-}
-
-const renderMouseResult = (id: string, result: MouseResult, json: boolean): void => {
-  if (json) {
-    console.log(JSON.stringify(result));
-    return;
-  }
-  if (!result.ok) {
-    const where = result.col !== null ? ` at (${result.col},${result.row})` : "";
-    const label = result.text ? ` ${kleur.cyan(result.text)}` : "";
-    console.error(
-      kleur.red(`✗ mouse failed:${where}${label} — ${result.reason ?? "unknown"} [${result.mode}]`),
-    );
-    process.exitCode = 1;
-    return;
-  }
-  const at = result.col !== null ? ` (${result.col},${result.row})` : "";
-  const label = result.text ? ` ${kleur.cyan(result.text)}` : "";
-  console.log(kleur.green(`✓ mouse [${result.mode}]${at}${label} on ${shortId(id)}`));
-};
-
-const parseButton = (raw: string): "left" | "middle" | "right" => {
-  if (raw === "middle" || raw === "right") return raw;
-  return "left";
-};
-
-// `localterm session mouse click <id>` — by --col/--row or --on-text.
-const runMouseClick = async (
-  id: string,
-  options: {
-    col?: number;
-    row?: number;
-    onText?: string;
-    button: string;
-    clicks?: number;
-    json: boolean;
-  },
-): Promise<void> => {
-  const body: Record<string, unknown> = { action: "click", button: parseButton(options.button) };
-  if (options.onText !== undefined) body.onText = options.onText;
-  else {
-    body.col = options.col ?? 0;
-    body.row = options.row ?? 0;
-  }
-  if (options.clicks !== undefined) body.clicks = options.clicks;
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/mouse`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response) return;
-  renderMouseResult(id, (await response.json()) as MouseResult, options.json);
-};
-
-// `localterm session mouse drag <id>` — drag from --from to --to.
-const runMouseDrag = async (
-  id: string,
-  options: {
-    fromCol: number;
-    fromRow: number;
-    toCol: number;
-    toRow: number;
-    button: string;
-    json: boolean;
-  },
-): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/mouse`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "drag",
-      fromCol: options.fromCol,
-      fromRow: options.fromRow,
-      toCol: options.toCol,
-      toRow: options.toRow,
-      button: parseButton(options.button),
-    }),
-  });
-  if (!response) return;
-  renderMouseResult(id, (await response.json()) as MouseResult, options.json);
-};
-
-// `localterm session mouse move <id>` — move the cursor.
-const runMouseMove = async (
-  id: string,
-  options: { col: number; row: number; json: boolean },
-): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/mouse`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ action: "move", col: options.col, row: options.row }),
-  });
-  if (!response) return;
-  renderMouseResult(id, (await response.json()) as MouseResult, options.json);
-};
-
-// `localterm session mouse scroll <id> up|down`.
-const runMouseScroll = async (
-  id: string,
-  direction: string,
-  options: { amount?: number; col?: number; row?: number; json: boolean },
-): Promise<void> => {
-  const body: Record<string, unknown> = {
-    action: "scroll",
-    direction: direction === "up" ? "up" : "down",
-  };
-  if (options.amount !== undefined) body.amount = options.amount;
-  if (options.col !== undefined) body.col = options.col;
-  if (options.row !== undefined) body.row = options.row;
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/mouse`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response) return;
-  renderMouseResult(id, (await response.json()) as MouseResult, options.json);
-};
-
-// `localterm session mouse state <id>` — mouse tracking + viewport size.
-const runMouseState = async (id: string): Promise<void> => {
-  const response = await fetchOrReport(`/sessions/${encodeURIComponent(id)}/mouse/state`, {});
-  if (!response) return;
-  const state = (await response.json()) as MouseState;
-  console.log(
-    `${kleur.green("✓")} mouse ${state.enabled ? kleur.green("enabled") : kleur.dim("disabled")} · ${state.cols}×${state.rows}`,
-  );
+  console.log(kleur.green(`✓ opening ${shortSessionId(id)} at ${url.href}`));
 };
 
 export const runSessionList = runList;
+export const runSessionCurrent = runCurrent;
 export const runSessionNew = runNew;
 export const runSessionKill = runKill;
 export const runSessionSendKeys = runSendKeys;
@@ -586,9 +495,11 @@ export const runSessionPin = runSetPin;
 export const runSessionAttach = runAttach;
 export const runSessionPress = runPress;
 export const runSessionWait = runWait;
-export const runSessionMouseClick = runMouseClick;
-export const runSessionMouseDrag = runMouseDrag;
-export const runSessionMouseMove = runMouseMove;
-export const runSessionMouseScroll = runMouseScroll;
-export const runSessionMouseState = runMouseState;
+export {
+  runSessionMouseClick,
+  runSessionMouseDrag,
+  runSessionMouseMove,
+  runSessionMouseScroll,
+  runSessionMouseState,
+} from "./session-mouse.js";
 export const runOneShotExec = runOneShotExecImpl;

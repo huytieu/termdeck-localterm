@@ -2,8 +2,11 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { Terminal } from "../../src/components/terminal";
 import {
+  DEFAULT_MUTE_EMOJI_COLORS,
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_TERMINAL_LINE_HEIGHT,
+  DISABLED_TERMINAL_MINIMUM_CONTRAST_RATIO,
+  LIGHT_TERMINAL_MINIMUM_CONTRAST_RATIO,
   RECONNECT_DELAY_MS,
   TERMINAL_CURSOR_BLINK_STORAGE_KEY,
   TERMINAL_CURSOR_STYLE_STORAGE_KEY,
@@ -13,12 +16,27 @@ import {
   TERMINAL_LINE_HEIGHT_STORAGE_KEY,
   TERMINAL_SCROLL_ON_USER_INPUT_STORAGE_KEY,
   TERMINAL_SCROLLBACK_STORAGE_KEY,
+  TERMINAL_TAB_SEQUENCE,
+  TERMINAL_BACK_TAB_SEQUENCE,
+  TERMINAL_CURSOR_LINE_END_SEQUENCE,
+  TERMINAL_CURSOR_LINE_START_SEQUENCE,
+  TERMINAL_DELETE_TO_LINE_START_SEQUENCE,
+  KITTY_KEYBOARD_DISAMBIGUATE_FLAG,
+  KITTY_KEYBOARD_REPORT_EVENT_TYPES_FLAG,
   LIGATURES_ENABLED_STORAGE_KEY,
+  MUTE_EMOJI_COLORS_STORAGE_KEY,
+  MOBILE_RESUME_STORAGE_KEY,
   DEFAULT_CWD_STORAGE_KEY,
+  CUSTOM_FONT_FAMILY_STORAGE_KEY,
+  CUSTOM_THEMES_STORAGE_KEY,
+  TERMINAL_FONT_STORAGE_KEY,
+  TERMINAL_THEME_STORAGE_KEY,
 } from "../../src/lib/constants";
 import { DEFAULT_TERMINAL_CURSOR_STYLE } from "../../src/lib/terminal-cursor";
 import { DEFAULT_TERMINAL_SCROLLBACK_LINES } from "../../src/lib/terminal-scrollback";
+import { CUSTOM_FONT_ID } from "../../src/lib/terminal-fonts";
 import { setTabFaviconState } from "@/utils/set-tab-favicon-state";
+import { FRESH_SESSION_QUERY_PARAM } from "@/utils/fresh-session-query-param";
 
 interface FakeWebSocketHandle {
   url: string;
@@ -41,10 +59,12 @@ interface FakeXtermHandle {
   customWheelEventHandler: ((event: WheelEvent) => boolean) | null;
   fireTitleChange: (title: string) => void;
   fireData: (data: string) => void;
+  fireTerminalResponse: (data: string) => void;
   getOptions: () => Record<string, unknown>;
   setBufferState: (state: { baseY: number; viewportY: number }) => void;
   scrollLines: ReturnType<typeof vi.fn>;
   scrollToBottom: ReturnType<typeof vi.fn>;
+  selectAll: ReturnType<typeof vi.fn>;
   write: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   registerCharacterJoiner: ReturnType<typeof vi.fn>;
@@ -59,9 +79,31 @@ interface FakeSearchAddonHandle {
   fireResults: (results: { resultIndex: number; resultCount: number }) => void;
 }
 
+interface FakeWebglAddonOptions {
+  muteEmojiColors?: boolean;
+}
+
+interface FakeWebglAddonHandle {
+  muteEmojiColors: boolean | undefined;
+  setEmojiColorsMuted: ReturnType<typeof vi.fn>;
+}
+
+interface KeyboardModifiers {
+  shiftKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+}
+
+interface DispatchedKeyResult {
+  preventDefaultCalls: number;
+  handlerResult: boolean;
+}
+
 const fakeWebSockets: FakeWebSocketHandle[] = [];
 const fakeXterms: FakeXtermHandle[] = [];
 const fakeSearchAddons: FakeSearchAddonHandle[] = [];
+const fakeWebglAddons: FakeWebglAddonHandle[] = [];
 
 const installFakeWebSocket = () => {
   class FakeWebSocket {
@@ -139,12 +181,14 @@ vi.mock("@xterm/xterm", () => {
     buffer = { active: { baseY: 0, viewportY: 0 } };
     scrollLines = vi.fn();
     scrollToBottom = vi.fn();
+    selectAll = vi.fn();
     write = vi.fn((_data: string, callback?: () => void) => callback?.());
     focus = vi.fn();
     registerCharacterJoiner = vi.fn((_handler: (text: string) => [number, number][]) => 1);
     deregisterCharacterJoiner = vi.fn((_joinerId: number) => {});
     private titleListeners = new Set<(title: string) => void>();
     private dataListeners = new Set<(data: string) => void>();
+    private userInputListeners = new Set<() => void>();
     private csiHandlers: FakeCsiHandlerEntry[] = [];
     private handle: FakeXtermHandle;
 
@@ -173,6 +217,10 @@ vi.mock("@xterm/xterm", () => {
           for (const listener of this.titleListeners) listener(title);
         },
         fireData: (data: string) => {
+          for (const listener of this.userInputListeners) listener();
+          for (const listener of this.dataListeners) listener(data);
+        },
+        fireTerminalResponse: (data: string) => {
           for (const listener of this.dataListeners) listener(data);
         },
         getOptions: () => this.options,
@@ -181,6 +229,7 @@ vi.mock("@xterm/xterm", () => {
         },
         scrollLines: this.scrollLines,
         scrollToBottom: this.scrollToBottom,
+        selectAll: this.selectAll,
         write: this.write,
         focus: this.focus,
         registerCharacterJoiner: this.registerCharacterJoiner,
@@ -207,6 +256,12 @@ vi.mock("@xterm/xterm", () => {
           version: "15-graphemes",
           wcwidth: (_codepoint: number): 0 | 1 | 2 => 1,
           charProperties: (_codepoint: number, _preceding: number) => 0,
+        },
+      },
+      coreService: {
+        onUserInput: (listener: () => void) => {
+          this.userInputListeners.add(listener);
+          return { dispose: () => this.userInputListeners.delete(listener) };
         },
       },
     };
@@ -263,8 +318,16 @@ vi.mock("@xterm/addon-web-links", () => {
 
 vi.mock("@xterm/addon-webgl", () => {
   class FakeWebglAddon {
+    setEmojiColorsMuted = vi.fn();
     onContextLoss = () => {};
     dispose = () => {};
+
+    constructor(options?: FakeWebglAddonOptions) {
+      fakeWebglAddons.push({
+        muteEmojiColors: options?.muteEmojiColors,
+        setEmojiColorsMuted: this.setEmojiColorsMuted,
+      });
+    }
   }
   return { WebglAddon: FakeWebglAddon };
 });
@@ -333,6 +396,22 @@ const stubBrowserGlobals = () => {
   );
 };
 
+const installTouchMatchMedia = () => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: query === "(pointer: coarse)",
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+};
+
 const dispatchFindShortcut = (handle: FakeXtermHandle | undefined): boolean | undefined => {
   if (!handle?.customKeyEventHandler) return undefined;
   const event = new KeyboardEvent("keydown", { key: "f", metaKey: true });
@@ -357,6 +436,7 @@ beforeEach(() => {
   fakeWebSockets.length = 0;
   fakeXterms.length = 0;
   fakeSearchAddons.length = 0;
+  fakeWebglAddons.length = 0;
   stubBrowserGlobals();
   installFakeWebSocket();
   Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
@@ -720,101 +800,461 @@ describe("Terminal overlay input routing", () => {
   });
 });
 
-const dispatchEnterKey = (
+describe("Terminal PTY resize ownership", () => {
+  it("reports browser focus and pointer activity to the server", () => {
+    render(<Terminal />);
+    act(() => fakeWebSockets[0]?.fireOpen());
+    fakeWebSockets[0]?.send.mockClear();
+
+    fireEvent.blur(window);
+    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "client-focus", focused: false }),
+    );
+
+    fakeWebSockets[0]?.send.mockClear();
+    fireEvent.focus(window);
+    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "client-focus", focused: true }),
+    );
+
+    fakeWebSockets[0]?.send.mockClear();
+    fireEvent.pointerDown(document.body);
+    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "client-focus", focused: true }),
+    );
+  });
+});
+
+const dispatchTabKey = (
   handle: FakeXtermHandle | undefined,
-  modifiers: { shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } = {},
-): { preventDefaultCalls: number; handlerResult: boolean } | undefined => {
+  modifiers: KeyboardModifiers = {},
+): DispatchedKeyResult | undefined => {
   if (!handle?.customKeyEventHandler) return undefined;
-  const event = new KeyboardEvent("keydown", { key: "Enter", ...modifiers });
+  const event = new KeyboardEvent("keydown", { key: "Tab", ...modifiers });
   let preventDefaultCalls = 0;
   Object.defineProperty(event, "preventDefault", { value: () => preventDefaultCalls++ });
   const handlerResult = handle.customKeyEventHandler(event);
   return { preventDefaultCalls, handlerResult };
 };
 
-describe("Terminal kitty keyboard Shift+Enter", () => {
-  it("emits CSI u for Shift+Enter once the TUI pushes the kitty disambiguate flag", () => {
+describe("Terminal modified Tab routing", () => {
+  it("leaves Ctrl+Tab to the browser while the shell is idle", () => {
     render(<Terminal />);
-    act(() => {
-      fakeWebSockets[0]?.fireOpen();
-      fakeXterms[0]?.invokeCsiHandler(">", "u", [1]);
-    });
+    act(() => fakeWebSockets[0]?.fireOpen());
     fakeWebSockets[0]?.send.mockClear();
 
-    const result = dispatchEnterKey(fakeXterms[0], { shiftKey: true });
+    const result = dispatchTabKey(fakeXterms[0], { ctrlKey: true });
 
-    expect(result?.handlerResult).toBe(false);
-    expect(result?.preventDefaultCalls).toBe(1);
-    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: "input", data: "\x1b[13;2u" }),
-    );
+    expect(result).toEqual({ handlerResult: false, preventDefaultCalls: 0 });
+    expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
   });
 
-  it("emits CSI u for Ctrl+Enter and Cmd+Enter when kitty mode is active", () => {
+  it("normalizes held Ctrl+Tab and Ctrl+Shift+Tab for a foreground terminal app", () => {
     render(<Terminal />);
     act(() => {
       fakeWebSockets[0]?.fireOpen();
-      fakeXterms[0]?.invokeCsiHandler(">", "u", [1]);
+      fakeWebSockets[0]?.fireMessage({ type: "foreground", process: "herdr" });
     });
     fakeWebSockets[0]?.send.mockClear();
 
-    dispatchEnterKey(fakeXterms[0], { ctrlKey: true });
-    dispatchEnterKey(fakeXterms[0], { metaKey: true });
+    const nextResult = dispatchTabKey(fakeXterms[0], { ctrlKey: true });
+    const previousResult = dispatchTabKey(fakeXterms[0], { ctrlKey: true, shiftKey: true });
 
+    expect(nextResult).toEqual({ handlerResult: false, preventDefaultCalls: 1 });
+    expect(previousResult).toEqual({ handlerResult: false, preventDefaultCalls: 1 });
     expect(fakeWebSockets[0]?.send).toHaveBeenNthCalledWith(
       1,
-      JSON.stringify({ type: "input", data: "\x1b[13;5u" }),
+      JSON.stringify({ type: "input", data: TERMINAL_TAB_SEQUENCE }),
     );
     expect(fakeWebSockets[0]?.send).toHaveBeenNthCalledWith(
       2,
-      JSON.stringify({ type: "input", data: "\x1b[13;9u" }),
+      JSON.stringify({ type: "input", data: TERMINAL_BACK_TAB_SEQUENCE }),
     );
   });
 
-  it("leaves plain Enter to the xterm.js default handler regardless of kitty mode", () => {
+  it("leaves Cmd+Tab to the operating system while a terminal app is foregrounded", () => {
     render(<Terminal />);
     act(() => {
       fakeWebSockets[0]?.fireOpen();
-      fakeXterms[0]?.invokeCsiHandler(">", "u", [1]);
+      fakeWebSockets[0]?.fireMessage({ type: "foreground", process: "herdr" });
     });
     fakeWebSockets[0]?.send.mockClear();
 
-    const plainResult = dispatchEnterKey(fakeXterms[0]);
+    const result = dispatchTabKey(fakeXterms[0], { metaKey: true });
 
-    expect(plainResult?.handlerResult).toBe(true);
+    expect(result).toEqual({ handlerResult: false, preventDefaultCalls: 0 });
     expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
   });
 
-  it("emits CSI u for Alt+Enter when kitty mode is active so the TUI gets the new protocol", () => {
+  it("restores Git metadata when herdr's slim hover handle is expanded", () => {
     render(<Terminal />);
     act(() => {
       fakeWebSockets[0]?.fireOpen();
-      fakeXterms[0]?.invokeCsiHandler(">", "u", [1]);
+      fakeWebSockets[0]?.fireMessage({
+        type: "git-diff-summary",
+        summary: {
+          isRepo: true,
+          files: 2,
+          additions: 337,
+          deletions: 20,
+          binaries: 0,
+          branch: "main",
+        },
+      });
     });
-    fakeWebSockets[0]?.send.mockClear();
 
-    const result = dispatchEnterKey(fakeXterms[0], { altKey: true });
+    expect(screen.getByLabelText(/view git diff/i)).not.toBeNull();
+    const toolbar = screen.getByRole("toolbar", { name: "terminal actions" });
+    const toolbarArea = toolbar.parentElement;
+    const toolbarHandle = toolbar.previousElementSibling;
 
-    expect(result?.handlerResult).toBe(false);
-    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: "input", data: "\x1b[13;3u" }),
+    act(() => {
+      fakeWebSockets[0]?.fireMessage({ type: "foreground", process: "/opt/homebrew/bin/herdr" });
+    });
+
+    expect(screen.queryByLabelText(/view git diff/i)).toBeNull();
+    expect(toolbar.className).toContain("opacity-0");
+    expect(toolbarArea?.className).toContain("pointer-events-none");
+    expect(toolbarHandle?.className).toContain("pointer-events-auto");
+    expect(toolbarHandle?.className).toContain("opacity-100");
+
+    if (toolbarArea) fireEvent.mouseEnter(toolbarArea);
+
+    expect(toolbar.className).toContain("opacity-100");
+    expect(toolbarArea?.className).toContain("pointer-events-auto");
+    expect(screen.getByLabelText(/view git diff/i)).not.toBeNull();
+
+    act(() => {
+      fakeWebSockets[0]?.fireMessage({ type: "foreground", process: null });
+    });
+
+    expect(screen.getByLabelText(/view git diff/i)).not.toBeNull();
+  });
+});
+
+const dispatchTerminalKey = (
+  handle: FakeXtermHandle | undefined,
+  eventType: "keydown" | "keyup",
+  key: string,
+  modifiers: KeyboardModifiers = {},
+): DispatchedKeyResult | undefined => {
+  if (!handle?.customKeyEventHandler) return undefined;
+  const event = new KeyboardEvent(eventType, { key, ...modifiers });
+  let preventDefaultCalls = 0;
+  Object.defineProperty(event, "preventDefault", { value: () => preventDefaultCalls++ });
+  const handlerResult = handle.customKeyEventHandler(event);
+  return { preventDefaultCalls, handlerResult };
+};
+
+const dispatchEnterKey = (
+  handle: FakeXtermHandle | undefined,
+  modifiers: KeyboardModifiers = {},
+): DispatchedKeyResult | undefined => dispatchTerminalKey(handle, "keydown", "Enter", modifiers);
+
+const activateKittyKeyboard = (flags: number): void => {
+  act(() => {
+    fakeWebSockets[0]?.fireOpen();
+    fakeXterms[0]?.invokeCsiHandler(">", "u", [flags]);
+  });
+};
+
+describe("Terminal on-screen keyboard arbitration", () => {
+  const queryOnScreenKeyboard = () => document.querySelector("[data-on-screen-keyboard]");
+  const openOnScreenKeyboard = () => {
+    fireEvent.click(screen.getByLabelText("toggle on-screen keyboard"));
+    const keyboard = queryOnScreenKeyboard();
+    if (!keyboard) throw new Error("on-screen keyboard did not open");
+    return keyboard;
+  };
+
+  beforeEach(() => {
+    installTouchMatchMedia();
+    vi.spyOn(window.history, "back").mockImplementation(() => {
+      window.history.replaceState(null, "");
+    });
+  });
+
+  it("keeps the touch action overlay hidden until the on-screen keyboard opens", () => {
+    installFakeLocalStorage();
+    render(<Terminal />);
+    const toolbar = screen.getByRole("toolbar", { name: "terminal actions" });
+
+    expect(toolbar.className).toContain("opacity-0");
+    expect(toolbar.parentElement?.className).toContain("pointer-events-none");
+
+    const keyboard = openOnScreenKeyboard();
+
+    expect(toolbar.className).toContain("opacity-100");
+    expect(toolbar.className).toContain("touch-pan-x");
+    expect(toolbar.parentElement?.className).toContain("pointer-events-auto");
+    expect(keyboard.className).not.toContain("border-t");
+
+    const actionsToggle = screen.getByLabelText("Show terminal actions");
+    fireEvent.pointerDown(actionsToggle);
+    fireEvent.click(actionsToggle);
+    expect(queryOnScreenKeyboard()).not.toBeNull();
+    expect(screen.getByLabelText("Hide terminal actions")).not.toBeNull();
+
+    fireEvent.pointerDown(screen.getByLabelText("find in terminal"));
+
+    expect(queryOnScreenKeyboard()).not.toBeNull();
+    expect(screen.getByLabelText("Hide terminal actions")).not.toBeNull();
+
+    fireEvent.click(screen.getByLabelText("toggle on-screen keyboard"));
+
+    expect(toolbar.className).toContain("opacity-0");
+    expect(toolbar.parentElement?.className).toContain("pointer-events-none");
+  });
+
+  it("restores Git metadata when the mobile overlay opens in herdr", () => {
+    installFakeLocalStorage({ [MOBILE_RESUME_STORAGE_KEY]: "false" });
+    render(<Terminal />);
+    act(() => {
+      fakeWebSockets[0]?.fireOpen();
+      fakeWebSockets[0]?.fireMessage({ type: "foreground", process: "herdr" });
+    });
+
+    expect(screen.queryByLabelText(/view git diff/i)).toBeNull();
+
+    openOnScreenKeyboard();
+    act(() => {
+      fakeWebSockets[0]?.fireMessage({
+        type: "git-diff-summary",
+        summary: {
+          isRepo: true,
+          files: 2,
+          additions: 337,
+          deletions: 20,
+          binaries: 0,
+          branch: "main",
+        },
+      });
+    });
+
+    expect(screen.getByLabelText(/view git diff/i)).not.toBeNull();
+    expect(screen.getByLabelText("Show terminal actions")).not.toBeNull();
+  });
+
+  it("dismisses an active system-keyboard input before opening for the terminal", () => {
+    render(<Terminal />);
+    const outsideInput = document.createElement("input");
+    document.body.appendChild(outsideInput);
+    outsideInput.focus();
+    const blurSpy = vi.spyOn(outsideInput, "blur");
+
+    openOnScreenKeyboard();
+
+    expect(blurSpy).toHaveBeenCalledOnce();
+    expect(document.activeElement).not.toBe(outsideInput);
+    outsideInput.remove();
+  });
+
+  it("keeps toolbar drags open but closes before an action summons the system keyboard", () => {
+    render(<Terminal />);
+    openOnScreenKeyboard();
+
+    fireEvent.pointerDown(screen.getByLabelText("terminal session"));
+    expect(queryOnScreenKeyboard()).not.toBeNull();
+
+    fireEvent.pointerDown(screen.getByLabelText("find in terminal"));
+    expect(queryOnScreenKeyboard()).not.toBeNull();
+
+    fireEvent.click(screen.getByLabelText("find in terminal"));
+    expect(queryOnScreenKeyboard()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByLabelText("find query"));
+  });
+
+  it("keeps the keyboard open while a keyboard-settings control receives focus", () => {
+    render(<Terminal />);
+    openOnScreenKeyboard();
+    const settingsBoundary = document.createElement("div");
+    const settingsButton = document.createElement("button");
+    settingsBoundary.setAttribute("data-on-screen-keyboard-settings", "");
+    settingsBoundary.appendChild(settingsButton);
+    document.body.appendChild(settingsBoundary);
+
+    act(() => settingsButton.focus());
+
+    expect(queryOnScreenKeyboard()).not.toBeNull();
+    settingsBoundary.remove();
+  });
+
+  it("closes when a non-terminal input receives programmatic focus", () => {
+    render(<Terminal />);
+    openOnScreenKeyboard();
+    const outsideInput = document.createElement("input");
+    document.body.appendChild(outsideInput);
+
+    act(() => outsideInput.focus());
+
+    expect(queryOnScreenKeyboard()).toBeNull();
+    expect(document.activeElement).toBe(outsideInput);
+    outsideInput.remove();
+  });
+});
+
+describe("Terminal Kitty keyboard protocol", () => {
+  it("enables xterm's native Kitty keyboard implementation", () => {
+    render(<Terminal />);
+
+    expect(fakeXterms[0]?.getOptions()).toMatchObject({
+      vtExtensions: { kittyKeyboard: true },
+    });
+  });
+
+  it("lets Kitty mode requests continue to xterm's native parser", () => {
+    render(<Terminal />);
+
+    let didLocalTermConsumeRequest = true;
+    act(() => {
+      didLocalTermConsumeRequest =
+        fakeXterms[0]?.invokeCsiHandler(">", "u", [
+          KITTY_KEYBOARD_DISAMBIGUATE_FLAG | KITTY_KEYBOARD_REPORT_EVENT_TYPES_FLAG,
+        ]) ?? true;
+    });
+
+    expect(didLocalTermConsumeRequest).toBe(false);
+  });
+
+  it("delegates Escape press and release to xterm while Kitty mode is active", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(
+      KITTY_KEYBOARD_DISAMBIGUATE_FLAG | KITTY_KEYBOARD_REPORT_EVENT_TYPES_FLAG,
     );
-  });
-
-  it("falls through Alt-only Enter to xterm.js when kitty mode is off so legacy \\e\\r is preserved", () => {
-    render(<Terminal />);
-    act(() => {
-      fakeWebSockets[0]?.fireOpen();
-    });
     fakeWebSockets[0]?.send.mockClear();
 
-    const result = dispatchEnterKey(fakeXterms[0], { altKey: true });
+    const keyDownResult = dispatchTerminalKey(fakeXterms[0], "keydown", "Escape");
+    const keyUpResult = dispatchTerminalKey(fakeXterms[0], "keyup", "Escape");
 
-    expect(result?.handlerResult).toBe(true);
+    expect(keyDownResult).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
+    expect(keyUpResult).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
     expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
   });
 
-  it("emits LF for Shift+Enter without kitty mode so Ink-based TUIs treat it as multi-line", () => {
+  it("preserves macOS editing mappings while Kitty mode is active", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(
+      KITTY_KEYBOARD_DISAMBIGUATE_FLAG | KITTY_KEYBOARD_REPORT_EVENT_TYPES_FLAG,
+    );
+    fakeWebSockets[0]?.send.mockClear();
+
+    const editingShortcuts = [
+      { key: "ArrowLeft", output: TERMINAL_CURSOR_LINE_START_SEQUENCE },
+      { key: "ArrowRight", output: TERMINAL_CURSOR_LINE_END_SEQUENCE },
+      { key: "Backspace", output: TERMINAL_DELETE_TO_LINE_START_SEQUENCE },
+    ];
+
+    for (const { key, output } of editingShortcuts) {
+      expect(dispatchTerminalKey(fakeXterms[0], "keydown", key, { metaKey: true })).toEqual({
+        handlerResult: false,
+        preventDefaultCalls: 1,
+      });
+      expect(fakeWebSockets[0]?.send).toHaveBeenLastCalledWith(
+        JSON.stringify({ type: "input", data: output }),
+      );
+      const sendCallCountBeforeKeyUp = fakeWebSockets[0]?.send.mock.calls.length;
+      expect(dispatchTerminalKey(fakeXterms[0], "keyup", key, { metaKey: true })).toEqual({
+        handlerResult: false,
+        preventDefaultCalls: 1,
+      });
+      expect(fakeWebSockets[0]?.send).toHaveBeenCalledTimes(sendCallCountBeforeKeyUp ?? 0);
+    }
+  });
+
+  it("leaves browser-owned Command text shortcuts outside Kitty input", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(
+      KITTY_KEYBOARD_DISAMBIGUATE_FLAG | KITTY_KEYBOARD_REPORT_EVENT_TYPES_FLAG,
+    );
+    fakeWebSockets[0]?.send.mockClear();
+
+    for (const key of ["c", "v", "V", "1"]) {
+      const modifiers = key === "V" ? { metaKey: true, shiftKey: true } : { metaKey: true };
+      expect(dispatchTerminalKey(fakeXterms[0], "keydown", key, modifiers)).toEqual({
+        handlerResult: false,
+        preventDefaultCalls: 0,
+      });
+      expect(dispatchTerminalKey(fakeXterms[0], "keyup", key, modifiers)).toEqual({
+        handlerResult: false,
+        preventDefaultCalls: 0,
+      });
+    }
+    expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps LocalTerm Command shortcuts ahead of browser arbitration", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(KITTY_KEYBOARD_DISAMBIGUATE_FLAG);
+
+    let shortcutResult: DispatchedKeyResult | undefined;
+    act(() => {
+      shortcutResult = dispatchTerminalKey(fakeXterms[0], "keydown", "f", { metaKey: true });
+    });
+
+    expect(shortcutResult).toEqual({ handlerResult: false, preventDefaultCalls: 1 });
+    expect(screen.queryByRole("search")).not.toBeNull();
+  });
+
+  it("preserves xterm's terminal select-all behavior in Kitty mode", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(KITTY_KEYBOARD_DISAMBIGUATE_FLAG);
+
+    expect(dispatchTerminalKey(fakeXterms[0], "keydown", "a", { metaKey: true })).toEqual({
+      handlerResult: false,
+      preventDefaultCalls: 0,
+    });
+    expect(fakeXterms[0]?.selectAll).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Option and Control arrows on xterm's native Kitty path", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(KITTY_KEYBOARD_DISAMBIGUATE_FLAG);
+    fakeWebSockets[0]?.send.mockClear();
+
+    const alternateResult = dispatchTerminalKey(fakeXterms[0], "keydown", "ArrowLeft", {
+      altKey: true,
+    });
+    const controlResult = dispatchTerminalKey(fakeXterms[0], "keydown", "ArrowRight", {
+      ctrlKey: true,
+    });
+    const controlTextResult = dispatchTerminalKey(fakeXterms[0], "keydown", "v", {
+      ctrlKey: true,
+    });
+
+    expect(alternateResult).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
+    expect(controlResult).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
+    expect(controlTextResult).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
+    expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
+  });
+
+  it("delegates modified Enter to xterm when Kitty disambiguation is active", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(KITTY_KEYBOARD_DISAMBIGUATE_FLAG);
+    fakeWebSockets[0]?.send.mockClear();
+
+    const shiftResult = dispatchEnterKey(fakeXterms[0], { shiftKey: true });
+    const controlResult = dispatchEnterKey(fakeXterms[0], { ctrlKey: true });
+    const alternateResult = dispatchEnterKey(fakeXterms[0], { altKey: true });
+    const commandResult = dispatchEnterKey(fakeXterms[0], { metaKey: true });
+
+    for (const result of [shiftResult, controlResult, alternateResult, commandResult]) {
+      expect(result).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
+    }
+    expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
+  });
+
+  it("leaves plain Enter to xterm regardless of Kitty mode", () => {
+    render(<Terminal />);
+    activateKittyKeyboard(KITTY_KEYBOARD_DISAMBIGUATE_FLAG);
+    fakeWebSockets[0]?.send.mockClear();
+
+    const result = dispatchEnterKey(fakeXterms[0]);
+
+    expect(result).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
+    expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
+  });
+
+  it("emits LF for plain Shift+Enter without Kitty mode", () => {
     render(<Terminal />);
     act(() => {
       fakeWebSockets[0]?.fireOpen();
@@ -823,45 +1263,48 @@ describe("Terminal kitty keyboard Shift+Enter", () => {
 
     const result = dispatchEnterKey(fakeXterms[0], { shiftKey: true });
 
-    expect(result?.handlerResult).toBe(false);
-    expect(result?.preventDefaultCalls).toBe(1);
+    expect(result).toEqual({ handlerResult: false, preventDefaultCalls: 1 });
     expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
       JSON.stringify({ type: "input", data: "\n" }),
     );
   });
 
-  it("does not fall back to LF for Ctrl+Shift+Enter so app-specific bindings stay intact", () => {
+  it("does not apply the LF fallback to other Enter modifiers", () => {
     render(<Terminal />);
     act(() => {
       fakeWebSockets[0]?.fireOpen();
     });
     fakeWebSockets[0]?.send.mockClear();
 
-    const result = dispatchEnterKey(fakeXterms[0], { shiftKey: true, ctrlKey: true });
+    const controlShiftResult = dispatchEnterKey(fakeXterms[0], {
+      shiftKey: true,
+      ctrlKey: true,
+    });
+    const alternateResult = dispatchEnterKey(fakeXterms[0], { altKey: true });
 
-    expect(result?.handlerResult).toBe(true);
+    expect(controlShiftResult).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
+    expect(alternateResult).toEqual({ handlerResult: true, preventDefaultCalls: 0 });
     expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
   });
 
-  it("falls back from CSI u to LF for Shift+Enter after the TUI pops its kitty flag", () => {
+  it("restores the Shift+Enter fallback after a TUI pops Kitty mode", () => {
     render(<Terminal />);
-    act(() => {
-      fakeWebSockets[0]?.fireOpen();
-      fakeXterms[0]?.invokeCsiHandler(">", "u", [1]);
-    });
-    fakeWebSockets[0]?.send.mockClear();
+    activateKittyKeyboard(KITTY_KEYBOARD_DISAMBIGUATE_FLAG);
 
-    dispatchEnterKey(fakeXterms[0], { shiftKey: true });
-    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: "input", data: "\x1b[13;2u" }),
-    );
+    expect(dispatchEnterKey(fakeXterms[0], { shiftKey: true })).toEqual({
+      handlerResult: true,
+      preventDefaultCalls: 0,
+    });
 
     act(() => {
       fakeXterms[0]?.invokeCsiHandler("<", "u", [1]);
     });
     fakeWebSockets[0]?.send.mockClear();
 
-    dispatchEnterKey(fakeXterms[0], { shiftKey: true });
+    expect(dispatchEnterKey(fakeXterms[0], { shiftKey: true })).toEqual({
+      handlerResult: false,
+      preventDefaultCalls: 1,
+    });
     expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
       JSON.stringify({ type: "input", data: "\n" }),
     );
@@ -890,6 +1333,27 @@ const installFakeLocalStorage = (initial: Record<string, string> = {}) => {
 };
 
 describe("Terminal scrollback replay suppression", () => {
+  it("tags generated terminal responses separately from user input", () => {
+    render(<Terminal />);
+    act(() => fakeWebSockets[0]?.fireOpen());
+    fakeWebSockets[0]?.send.mockClear();
+
+    act(() => {
+      fakeXterms[0]?.fireTerminalResponse("\x1b]11;rgb:1a1a/1b1b/2626\x1b\\");
+      fakeXterms[0]?.fireData("typed-input");
+    });
+
+    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "terminal-response",
+        data: "\x1b]11;rgb:1a1a/1b1b/2626\x1b\\",
+      }),
+    );
+    expect(fakeWebSockets[0]?.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: "input", data: "typed-input" }),
+    );
+  });
+
   it("drops xterm's responses to replayed query requests so they never reach the PTY", async () => {
     render(<Terminal />);
     act(() => {
@@ -922,7 +1386,7 @@ describe("Terminal scrollback replay suppression", () => {
     // server-side stripping: any response, any sequence, is dropped.
     fakeWebSockets[0]?.send.mockClear();
     act(() => {
-      fakeXterms[0]?.fireData("62;4;9;22c");
+      fakeXterms[0]?.fireTerminalResponse("62;4;9;22c");
     });
     expect(fakeWebSockets[0]?.send).not.toHaveBeenCalled();
 
@@ -949,6 +1413,17 @@ describe("Terminal theme picker", () => {
     render(<Terminal />);
     const seededTheme = fakeXterms[0]?.getOptions().theme as { background?: string } | undefined;
     expect(seededTheme?.background).toBe("#101010");
+    expect(fakeXterms[0]?.getOptions().minimumContrastRatio).toBe(
+      DISABLED_TERMINAL_MINIMUM_CONTRAST_RATIO,
+    );
+  });
+
+  it("seeds xterm with an accessible contrast floor for a stored light theme", () => {
+    installFakeLocalStorage({ "localterm:terminal-theme-id": "github-light" });
+    render(<Terminal />);
+    expect(fakeXterms[0]?.getOptions().minimumContrastRatio).toBe(
+      LIGHT_TERMINAL_MINIMUM_CONTRAST_RATIO,
+    );
   });
 
   it("seeds xterm with the stored theme on mount", () => {
@@ -981,6 +1456,56 @@ describe("Terminal theme picker", () => {
     });
     const pushedTheme = fakeXterms[0]?.getOptions().theme as { background?: string } | undefined;
     expect(pushedTheme?.background).toBe("#282a36");
+    expect(document.documentElement.style.getPropertyValue("--localterm-background")).toBe(
+      "#282a36",
+    );
+    expect(document.body.style.background).toBe("rgb(40, 42, 54)");
+  });
+
+  it("updates the contrast floor when a light theme is pushed live", () => {
+    installFakeLocalStorage();
+    render(<Terminal />);
+    act(() => {
+      fakeWebSockets[0]?.fireOpen();
+      fakeWebSockets[0]?.fireMessage({
+        type: "themes",
+        activeThemeId: "github-light",
+        customThemes: [],
+        initialized: true,
+      });
+    });
+    expect(fakeXterms[0]?.getOptions().minimumContrastRatio).toBe(
+      LIGHT_TERMINAL_MINIMUM_CONTRAST_RATIO,
+    );
+  });
+
+  it("seeds xterm and LocalTerm chrome from a cached custom theme", () => {
+    const customTheme = {
+      id: "custom-herdr",
+      name: "Herdr",
+      source: "test",
+      colors: {
+        background: "#20242c",
+        foreground: "#d8dee9",
+        cursor: "#88c0d0",
+        red: "#bf616a",
+        green: "#a3be8c",
+      },
+    };
+    installFakeLocalStorage({
+      [TERMINAL_THEME_STORAGE_KEY]: customTheme.id,
+      [CUSTOM_THEMES_STORAGE_KEY]: JSON.stringify([customTheme]),
+    });
+
+    render(<Terminal />);
+
+    const seededTheme = fakeXterms[0]?.getOptions().theme as { background?: string } | undefined;
+    expect(seededTheme?.background).toBe("#20242c");
+    expect(document.documentElement.style.getPropertyValue("--localterm-background")).toBe(
+      "#20242c",
+    );
+    expect(document.documentElement.style.getPropertyValue("--localterm-green")).toBe("#a3be8c");
+    expect(document.body.style.background).toBe("rgb(32, 36, 44)");
   });
 
   it("exposes a single labelled settings trigger in the toolbar", () => {
@@ -1010,6 +1535,20 @@ describe("Terminal font picker", () => {
     render(<Terminal />);
     const fontFamily = fakeXterms[0]?.getOptions().fontFamily;
     expect(fontFamily).toContain("Geist Mono");
+  });
+
+  it("seeds xterm and LocalTerm chrome with the cached custom font", () => {
+    installFakeLocalStorage({
+      [TERMINAL_FONT_STORAGE_KEY]: CUSTOM_FONT_ID,
+      [CUSTOM_FONT_FAMILY_STORAGE_KEY]: "Iosevka Custom",
+    });
+
+    render(<Terminal />);
+
+    expect(fakeXterms[0]?.getOptions().fontFamily).toContain("Iosevka Custom");
+    expect(document.documentElement.style.getPropertyValue("--localterm-font-family")).toContain(
+      "Iosevka Custom",
+    );
   });
 });
 
@@ -1376,6 +1915,36 @@ describe("Terminal hot-swap", () => {
   });
 });
 
+describe("Terminal emoji colors", () => {
+  it("mutes emoji colors by default", () => {
+    installFakeLocalStorage();
+    render(<Terminal />);
+
+    expect(fakeWebglAddons[0]?.muteEmojiColors).toBe(DEFAULT_MUTE_EMOJI_COLORS);
+  });
+
+  it("initializes WebGL with stored emoji colors enabled", () => {
+    installFakeLocalStorage({ [MUTE_EMOJI_COLORS_STORAGE_KEY]: "false" });
+    render(<Terminal />);
+
+    expect(fakeWebglAddons[0]?.muteEmojiColors).toBe(false);
+  });
+
+  it("updates WebGL and persists when emoji muting is toggled", () => {
+    installFakeLocalStorage();
+    render(<Terminal />);
+    fireEvent.click(screen.getByLabelText("terminal settings"));
+
+    act(() => {
+      fireEvent.click(screen.getByLabelText("toggle mute emoji colors"));
+    });
+
+    expect(fakeWebglAddons).toHaveLength(1);
+    expect(fakeWebglAddons[0]?.setEmojiColorsMuted).toHaveBeenLastCalledWith(false);
+    expect(localStorage.getItem(MUTE_EMOJI_COLORS_STORAGE_KEY)).toBe("false");
+  });
+});
+
 describe("Terminal ligatures", () => {
   it("does not register a character joiner on mount when ligatures are disabled", () => {
     installFakeLocalStorage();
@@ -1444,7 +2013,7 @@ describe("Terminal shell info", () => {
   });
 });
 
-describe("Terminal refresh reattach", () => {
+describe("Terminal session attachment", () => {
   const TEST_SID = "550e8400-e29b-41d4-a716-446655440000";
   const fireSessionFrame = (ws: FakeWebSocketHandle | undefined, id: string) => {
     ws?.fireOpen();
@@ -1462,6 +2031,85 @@ describe("Terminal refresh reattach", () => {
 
   afterEach(() => {
     window.history.replaceState(null, "", "/");
+  });
+
+  it("bypasses mobile resume for an explicitly requested fresh shell", () => {
+    installFakeLocalStorage();
+    installTouchMatchMedia();
+    window.history.replaceState(null, "", "/?fresh=1");
+
+    render(<Terminal />);
+
+    expect(fakeWebSockets).toHaveLength(1);
+    act(() => {
+      fireSessionFrame(fakeWebSockets[0], TEST_SID);
+    });
+    expect(new URL(window.location.href).searchParams.has(FRESH_SESSION_QUERY_PARAM)).toBe(false);
+  });
+
+  it("switches the current mobile tab to a fresh shell", () => {
+    const nextSessionId = "650e8400-e29b-41d4-a716-446655440000";
+    installFakeLocalStorage();
+    installTouchMatchMedia();
+    window.history.replaceState(null, "", "/?fresh=1");
+    render(<Terminal />);
+    act(() => {
+      fireSessionFrame(fakeWebSockets[0], TEST_SID);
+    });
+    vi.mocked(window.open).mockClear();
+
+    fireEvent.click(screen.getByLabelText("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: /^new shell$/i }));
+
+    expect(window.open).not.toHaveBeenCalled();
+    expect(fakeWebSockets[0]?.close).toHaveBeenCalledOnce();
+    expect(fakeWebSockets).toHaveLength(2);
+    const freshSocketUrl = new URL(fakeWebSockets[1]?.url ?? "http://localhost/ws");
+    expect(freshSocketUrl.searchParams.has("sid")).toBe(false);
+    expect(freshSocketUrl.searchParams.get("cwd")).toBe("/tmp");
+
+    act(() => {
+      fireSessionFrame(fakeWebSockets[1], nextSessionId);
+    });
+    expect(new URL(window.location.href).searchParams.get("sid")).toBe(nextSessionId);
+  });
+
+  it("does not let a pending mobile resume override an explicit fresh switch", async () => {
+    installFakeLocalStorage();
+    installTouchMatchMedia();
+    window.history.replaceState(null, "", "/");
+    render(<Terminal />);
+    expect(fakeWebSockets).toHaveLength(0);
+
+    fireEvent.click(screen.getByLabelText("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: /^new shell$/i }));
+    expect(fakeWebSockets).toHaveLength(1);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fakeWebSockets).toHaveLength(1);
+    expect(new URL(fakeWebSockets[0]?.url ?? "http://localhost/ws").searchParams.has("sid")).toBe(
+      false,
+    );
+  });
+
+  it("keeps opening a separate tab for a fresh shell on desktop", () => {
+    installFakeLocalStorage();
+    window.history.replaceState(null, "", "/");
+    render(<Terminal />);
+    act(() => {
+      fireSessionFrame(fakeWebSockets[0], TEST_SID);
+    });
+    vi.mocked(window.open).mockClear();
+
+    fireEvent.click(screen.getByLabelText("sessions"));
+    fireEvent.click(screen.getByRole("button", { name: /^new shell$/i }));
+
+    expect(fakeWebSockets).toHaveLength(1);
+    expect(window.open).toHaveBeenCalledOnce();
+    const openedUrl = String(vi.mocked(window.open).mock.calls[0]?.[0]);
+    expect(new URL(openedUrl).searchParams.get(FRESH_SESSION_QUERY_PARAM)).toBe("1");
   });
 
   it("persists the session id to ?sid= and reattaches to it after a remount", () => {

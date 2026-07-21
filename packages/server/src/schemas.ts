@@ -7,6 +7,7 @@ import {
   CAFFEINATE_BATTERY_LOW_WATER_MIN_PERCENT,
   CAFFEINATE_PREFERENCES_FILE_VERSION,
   DAEMON_CONFIG_FILE_VERSION,
+  WORKSPACE_FILE_VERSION,
   EXEC_MAX_OUTPUT_LIMIT_BYTES,
   EXEC_MAX_TIMEOUT_MS,
   MAX_AUTOMATION_CHANGED_FILES,
@@ -436,6 +437,13 @@ const inputMessageSchema = z
   })
   .strict();
 
+const terminalResponseMessageSchema = z
+  .object({
+    type: z.literal("terminal-response"),
+    data: z.string().max(MAX_INPUT_BYTES),
+  })
+  .strict();
+
 const resizeMessageSchema = z
   .object({
     type: z.literal("resize"),
@@ -443,6 +451,13 @@ const resizeMessageSchema = z
     rows: z.number().int().positive().max(MAX_ROWS),
     pixelWidth: z.number().int().nonnegative().optional(),
     pixelHeight: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const clientFocusMessageSchema = z
+  .object({
+    type: z.literal("client-focus"),
+    focused: z.boolean(),
   })
   .strict();
 
@@ -550,7 +565,9 @@ const readyMessageSchema = z
 
 export const clientToServerMessageSchema = z.discriminatedUnion("type", [
   inputMessageSchema,
+  terminalResponseMessageSchema,
   resizeMessageSchema,
+  clientFocusMessageSchema,
   caffeinateModeInputMessageSchema,
   caffeinateCommandsInputMessageSchema,
   caffeinateActivityGateInputMessageSchema,
@@ -1557,14 +1574,10 @@ const compressMessageSchema = z
 // attached to the session a peer joined.
 const peerAttachedMessageSchema = z.object({ type: z.literal("peer-attached") }).strict();
 
-// The PTY's effective size — the min cols/rows across all attached clients
-// (tmux-style: a narrower peer constrains everyone). Broadcast whenever that
-// min changes (a peer attaches/detaches, or any client resizes) so each
-// viewer can mask the dead area beyond its own — possibly wider — grid as
-// inactive chrome instead of empty terminal background. A viewer whose own
-// cols/rows equal the effective size is the sole/limiting one and renders no
-// mask; a lone viewer is never sent the frame at all. See
-// SessionManager.recomputeResize for the broadcast gating.
+// The PTY's effective size follows the most recently focused or interactive
+// viewer. Broadcast whenever that viewer or its dimensions change so passive
+// clients can reflow to the live PTY width and mask any wider dead area. A lone
+// viewer is only sent the frame when a peer detaches, clearing a prior mask.
 const ptySizeMessageSchema = z
   .object({
     type: z.literal("pty-size"),
@@ -1691,11 +1704,30 @@ export const authSessionSchema = z.object({
   user: z.string().nullable(),
 });
 
+// Persisted workspace manifest (~/.localterm/workspace.json): per owner + per
+// browser-profile windowId, the open tabs ({cwd, shell}) so the daemon can
+// reopen them via CDP on the next start. `owner` is null in single-authority
+// mode; a string under an identity provider. `savedAt` bounds crash recovery
+// (the manifest is the last flushed snapshot, not the exact stop-time state).
+export const workspaceTabSchema = z.object({ cwd: z.string(), shell: z.string() }).strict();
+export const workspaceEntrySchema = z
+  .object({
+    owner: z.string().nullable(),
+    windowId: z.string(),
+    tabs: z.array(workspaceTabSchema),
+    savedAt: z.number().int(),
+  })
+  .strict();
+export const workspaceFileSchema = z
+  .object({ version: z.literal(WORKSPACE_FILE_VERSION), entries: z.array(workspaceEntrySchema) })
+  .strict();
+
 export const daemonConfigFileSchema = z
   .object({
     version: z.literal(DAEMON_CONFIG_FILE_VERSION),
     cdpPort: cdpPortSchema,
     graceSeconds: graceSecondsSchema.optional(),
+    workspaceRestore: z.boolean().optional(),
     identity: identityConfigSchema.optional(),
   })
   .strict();
@@ -1709,6 +1741,7 @@ export const daemonConfigSchema = z
   .object({
     cdpPort: cdpPortSchema,
     graceSeconds: graceSecondsSchema,
+    workspaceRestore: z.boolean(),
     defaultShell: z.string().min(1),
     shells: z.array(z.string().min(1)),
   })
@@ -1717,7 +1750,11 @@ export const daemonConfigSchema = z
 // PUT /api/config body — either knob may be omitted when only the other is
 // being changed.
 export const updateDaemonConfigInputSchema = z
-  .object({ cdpPort: cdpPortSchema.optional(), graceSeconds: graceSecondsSchema.optional() })
+  .object({
+    cdpPort: cdpPortSchema.optional(),
+    graceSeconds: graceSecondsSchema.optional(),
+    workspaceRestore: z.boolean().optional(),
+  })
   .strict();
 
 // Secret identity + the env var a shim exports it as. `name` is the secret's

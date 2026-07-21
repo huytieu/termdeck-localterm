@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { GitDiffWatcher } from "../src/git-diff-watcher.js";
 import { SessionManager } from "../src/session-manager.js";
 import type { ClientSocket } from "../src/utils/ws-socket.js";
 import type { ServerToClientMessage } from "../src/types.js";
@@ -89,6 +90,59 @@ describe("SessionManager no-clients grace", { tags: ["integration"] }, () => {
     expect(spawned.session.isExited).toBe(true);
   }, 10_000);
 
+  it("runs recursive Git watchers only while a detached session has viewers", () => {
+    const startWatcher = vi.spyOn(GitDiffWatcher.prototype, "start").mockImplementation(() => {});
+    const stopWatcher = vi.spyOn(GitDiffWatcher.prototype, "stop").mockImplementation(() => {});
+    const repositoryDir = fs.mkdtempSync(path.join(os.tmpdir(), "localterm-watcher-"));
+    fs.mkdirSync(path.join(repositoryDir, ".git"));
+    try {
+      manager = createManager(50);
+      const sessionId = manager.spawnDetached({ ...shellInput, cwd: repositoryDir }, true);
+      expect(sessionId).not.toBeNull();
+      expect(startWatcher).not.toHaveBeenCalled();
+      if (!sessionId) return;
+
+      const viewer = createFakeSocket();
+      expect(manager.attach(viewer, sessionId)).not.toBeNull();
+      expect(startWatcher).toHaveBeenCalledOnce();
+
+      manager.detach(viewer);
+      expect(stopWatcher).toHaveBeenCalledOnce();
+    } finally {
+      manager?.disposeAll();
+      fs.rmSync(repositoryDir, { recursive: true, force: true });
+      startWatcher.mockRestore();
+      stopWatcher.mockRestore();
+    }
+  });
+
+  it("shares one recursive Git watcher across viewed sessions in the same repository", () => {
+    const startWatcher = vi.spyOn(GitDiffWatcher.prototype, "start").mockImplementation(() => {});
+    const stopWatcher = vi.spyOn(GitDiffWatcher.prototype, "stop").mockImplementation(() => {});
+    const repositoryDir = fs.mkdtempSync(path.join(os.tmpdir(), "localterm-watcher-shared-"));
+    fs.mkdirSync(path.join(repositoryDir, ".git"));
+    try {
+      manager = createManager(50);
+      const firstViewer = createFakeSocket();
+      const secondViewer = createFakeSocket();
+      const first = manager.spawnAndAttach(firstViewer, { ...shellInput, cwd: repositoryDir });
+      const second = manager.spawnAndAttach(secondViewer, { ...shellInput, cwd: repositoryDir });
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(startWatcher).toHaveBeenCalledOnce();
+
+      manager.detach(firstViewer);
+      expect(stopWatcher).not.toHaveBeenCalled();
+      manager.detach(secondViewer);
+      expect(stopWatcher).toHaveBeenCalledOnce();
+    } finally {
+      manager?.disposeAll();
+      fs.rmSync(repositoryDir, { recursive: true, force: true });
+      startWatcher.mockRestore();
+      stopWatcher.mockRestore();
+    }
+  });
+
   it("groups attached clients by window id in clientProfiles", () => {
     manager = createManager(50);
     const wsA = createFakeSocket();
@@ -157,34 +211,23 @@ describe("SessionManager no-clients grace", { tags: ["integration"] }, () => {
     expect(spawned.session.isExited).toBe(true);
   }, 10_000);
 
-  it("reaps an idle /bin/sh whose pty.process aliases the shell (macOS sh→bash)", async () => {
-    // Regression: on macOS /bin/sh is bash (GNU bash 3.2 in sh-mode), which
-    // overrides its kernel process name at startup so node-pty's pty.process
-    // reports "bash" for an idle /bin/sh while the invoked basename is "sh".
-    // The shell's own settled name must read as "no foreground" — otherwise the
-    // idle shell at its prompt is misreported as a running program, the
-    // no-clients grace reap sees "alive-quiet" forever, and the orphaned PTY
-    // never clears. Unlike the tests above, hasForeground is NOT forced off
-    // here; the real ForegroundWatcher reading pty.process drives the reap
-    // gate, so the alias mismatch is exercised end-to-end.
+  it("reaps an idle /bin/sh — an unhooked shell reports no foreground", async () => {
+    // /bin/sh is not in HOOKED_SHELL_NAMES, so it gets no preexec/precmd hook
+    // and never reports a foreground program. An idle /bin/sh therefore reads
+    // "ready" and reaps. (This replaces the old pty.process alias check: on
+    // macOS /bin/sh is bash in sh-mode and overrode its kernel process name, so
+    // pty.process reported "bash" for an idle shell — a mismatch the tpgid
+    // disambiguator handled. The foreground state now comes from the shell
+    // hook, which /bin/sh doesn't install, so the alias can no longer mislead.)
     manager = createManager(150);
     const ws = createFakeSocket();
     const spawned = manager.spawnAndAttach(ws, shellInput);
     expect(spawned).not.toBeNull();
     if (!spawned) return;
 
-    // Let the shell settle and the resolver learn "bash" as a shell name (ps
-    // ucomm of pty.pid reads "bash" once bash sets its proctitle, ~+20ms).
-    // ~1.4s covers the override plus the ForegroundWatcher's first polls.
-    await wait(1400);
-
-    // Force output idleness WITHOUT clearing hasForeground — the foreground
-    // gate must be exercised against the real pty.process reading, not masked.
+    // Force output idleness without clearing hasForeground: /bin/sh has no
+    // hook, so hasForeground is already false and the idle shell reads "ready".
     manager.markOutputIdleForTest(spawned.id);
-
-    // An idle shell at its prompt must read "ready", not "alive-quiet". With
-    // the bug, pty.process="bash" is never recognized as the shell →
-    // hasForeground stays true → alive-quiet, and the grace reap never fires.
     expect(manager.list()[0]?.state).toBe("ready");
 
     manager.detach(ws);
@@ -234,46 +277,39 @@ describe("SessionManager no-clients grace", { tags: ["integration"] }, () => {
     expect(spawned.session.isExited).toBe(true);
   }, 10_000);
 
-  it("still reports a real foreground program in /bin/sh (alive-quiet)", async () => {
-    // Guards the fix against over-suppression: learning the shell's alias name
-    // ("bash") must not absorb a genuine foreground program. A program the user
-    // runs reads as a NEW name on its first poll (not in the shell set), so it's
-    // reported as foreground → alive-quiet while it runs quietly.
+  it("keeps a dormant shell alive while the hook reports a foreground program (alive-quiet)", async () => {
+    // The shell hook drives hasForeground via the session's `foreground` event
+    // (preexec → fg;<token>, precmd → fg-idle). This exercises the grace reap's
+    // foreground gate against that signal: a quiet-but-running program (set
+    // here deterministically via markForegroundForTest, mirroring what the hook
+    // would set) holds the shell past the grace window, and releasing it reaps.
     manager = createManager(150);
     const ws = createFakeSocket();
     const spawned = manager.spawnAndAttach(ws, shellInput);
     expect(spawned).not.toBeNull();
     if (!spawned) return;
 
-    // Settle so "bash" is learned as a shell name.
-    await wait(1400);
+    // A foreground program is running but output has gone quiet → alive-quiet.
+    manager.markOutputIdleForTest(spawned.id);
+    manager.markForegroundForTest(spawned.id);
+    expect(manager.list()[0]?.state).toBe("alive-quiet");
 
-    // Run a quiet foreground program. It reads as a NEW name ("sleep") not in
-    // the shell set, so it's reported as foreground despite "bash" being learned.
-    spawned.session.write("sleep 2\n");
+    // With a client attached the grace timer isn't armed, so it survives.
+    await wait(250);
+    expect(manager.size()).toBe(1);
+    expect(spawned.session.isExited).toBe(false);
 
-    // sleep produces no output, so once the echo's output recency fades past the
-    // activity window the state is alive-quiet (foreground running, output
-    // quiet). Poll for it so the assertion absorbs the ForegroundWatcher's tick
-    // and output-recency timing under load.
-    let sawAliveQuiet = false;
-    for (let i = 0; i < 12; i++) {
-      await wait(250);
-      if (manager.list()[0]?.state === "alive-quiet") {
-        sawAliveQuiet = true;
-        break;
-      }
-    }
-    expect(sawAliveQuiet).toBe(true);
-
-    // sleep exits → shell returns to prompt; output recency fades → ready.
-    // Detach and the grace reap tears it down.
-    await wait(3000);
+    // The client leaves; the grace re-check sees alive-quiet and reschedules.
     manager.detach(ws);
-    await wait(400);
-    expect(manager.size()).toBe(0);
+    await wait(250);
+    expect(manager.size()).toBe(1);
+    expect(spawned.session.isExited).toBe(false);
+
+    // The program exits (precmd → fg-idle) → ready → reaped.
+    manager.markForegroundForTest(spawned.id, false);
+    expect(await pollFor(() => manager.size() === 0)).toBe(true);
     expect(spawned.session.isExited).toBe(true);
-  }, 15_000);
+  }, 10_000);
 
   it("returns null when attaching to an unknown id (caller spawns fresh)", () => {
     manager = createManager(60_000);
@@ -346,7 +382,7 @@ describe("SessionManager pending promote", { tags: ["integration"] }, () => {
   });
 });
 
-describe("SessionManager peer-attached", { tags: ["integration"] }, () => {
+describe("SessionManager multi-viewer coordination", { tags: ["integration"] }, () => {
   const noopHooks = {
     onOutputActivity: () => {},
     onSessionEvent: () => {},
@@ -386,6 +422,35 @@ describe("SessionManager peer-attached", { tags: ["integration"] }, () => {
     expect(peerAttached[0].ws).toBe(first);
     expect(peerAttached[0].payload).toEqual({ type: "peer-attached" });
   });
+
+  it("accepts user input from every viewer but only one generated response", () => {
+    manager = new SessionManager({ sendControl: () => {}, hooks: noopHooks });
+    const desktop = createFakeSocket();
+    const phone = createFakeSocket();
+    const spawned = manager.spawnAndAttach(desktop, shellInput);
+    expect(spawned).not.toBeNull();
+    if (!spawned) return;
+    manager.attach(phone, spawned.id);
+    void manager.promote(desktop, false);
+    void manager.promote(phone, false);
+    const write = vi.spyOn(spawned.session, "write").mockImplementation(() => {});
+
+    manager.writeTerminalResponse(phone, "dropped-phone-response");
+    manager.writeTerminalResponse(desktop, "desktop-response");
+    manager.writeInput(phone, "phone-user-input");
+    manager.writeTerminalResponse(desktop, "dropped-desktop-response");
+    manager.writeTerminalResponse(phone, "phone-response");
+    expect(write.mock.calls).toEqual([
+      ["desktop-response"],
+      ["phone-user-input"],
+      ["phone-response"],
+    ]);
+
+    manager.detach(phone);
+    manager.writeTerminalResponse(desktop, "promoted-desktop-response");
+    expect(write).toHaveBeenCalledTimes(4);
+    expect(write).toHaveBeenLastCalledWith("promoted-desktop-response");
+  });
 });
 
 describe("SessionManager pty-size", { tags: ["integration"] }, () => {
@@ -410,13 +475,13 @@ describe("SessionManager pty-size", { tags: ["integration"] }, () => {
     });
     const desktop = createFakeSocket();
     manager.spawnAndAttach(desktop, shellInput);
-    manager.promote(desktop, false);
+    void manager.promote(desktop, false);
     manager.resize(desktop, 120, 40);
     manager.resize(desktop, 100, 30);
     expect(sent.filter((entry) => entry.payload.type === "pty-size")).toEqual([]);
   });
 
-  it("broadcasts the constrained size when a narrower peer joins and clears it when the peer leaves", () => {
+  it("hands PTY size from mobile back to a focused desktop", () => {
     const sent: { ws: ClientSocket; payload: ServerToClientMessage }[] = [];
     manager = new SessionManager({
       sendControl: (ws, payload) => sent.push({ ws, payload }),
@@ -426,27 +491,47 @@ describe("SessionManager pty-size", { tags: ["integration"] }, () => {
     const spawned = manager.spawnAndAttach(desktop, shellInput);
     expect(spawned).not.toBeNull();
     if (!spawned) return;
-    manager.promote(desktop, false);
+    void manager.promote(desktop, false);
     manager.resize(desktop, 120, 40);
-    // Lone desktop: unconstrained, so no pty-size frame.
-    expect(sent.filter((entry) => entry.payload.type === "pty-size")).toEqual([]);
+    manager.setClientFocus(desktop, true);
 
-    // A mobile ingests the share QR and reports its narrow viewport.
     const mobile = createFakeSocket();
     manager.attach(mobile, spawned.id);
-    manager.promote(mobile, false);
+    void manager.promote(mobile, false);
     manager.resize(mobile, 40, 24);
-    const constrained = sent.filter(
+    expect(
+      sent.some(
+        (entry) =>
+          entry.payload.type === "pty-size" &&
+          entry.payload.cols === 40 &&
+          entry.payload.rows === 24,
+      ),
+    ).toBe(false);
+
+    manager.setClientFocus(mobile, true);
+    const mobileSizeFrames = sent.filter(
       (entry) =>
         entry.payload.type === "pty-size" && entry.payload.cols === 40 && entry.payload.rows === 24,
     );
-    // Both viewers learn the effective size — the mobile is the limiter so its
-    // own grid matches (no mask); the desktop masks the dead area.
-    expect(constrained.some((entry) => entry.ws === desktop)).toBe(true);
-    expect(constrained.some((entry) => entry.ws === mobile)).toBe(true);
+    expect(mobileSizeFrames.some((entry) => entry.ws === desktop)).toBe(true);
+    expect(mobileSizeFrames.some((entry) => entry.ws === mobile)).toBe(true);
 
-    // The mobile leaves → the desktop is unconstrained again → one clear frame
-    // at the lone viewer's own size so the mask erases.
+    sent.length = 0;
+    manager.setClientFocus(desktop, true);
+    expect(sent.filter((entry) => entry.payload.type === "pty-size")).toEqual([
+      { ws: desktop, payload: { type: "pty-size", cols: 120, rows: 40 } },
+      { ws: mobile, payload: { type: "pty-size", cols: 120, rows: 40 } },
+    ]);
+
+    manager.setClientFocus(mobile, true);
+    sent.length = 0;
+    manager.setClientFocus(mobile, false);
+    expect(sent.filter((entry) => entry.payload.type === "pty-size")).toEqual([
+      { ws: desktop, payload: { type: "pty-size", cols: 120, rows: 40 } },
+      { ws: mobile, payload: { type: "pty-size", cols: 120, rows: 40 } },
+    ]);
+
+    manager.setClientFocus(mobile, true);
     sent.length = 0;
     manager.detach(mobile);
     expect(sent.filter((entry) => entry.payload.type === "pty-size")).toEqual([
@@ -454,7 +539,7 @@ describe("SessionManager pty-size", { tags: ["integration"] }, () => {
     ]);
   });
 
-  it("seeds a wider joiner with the current constrained size when its report doesn't change the min", () => {
+  it("lets input reclaim PTY size without a focus frame", () => {
     const sent: { ws: ClientSocket; payload: ServerToClientMessage }[] = [];
     manager = new SessionManager({
       sendControl: (ws, payload) => sent.push({ ws, payload }),
@@ -464,29 +549,60 @@ describe("SessionManager pty-size", { tags: ["integration"] }, () => {
     const spawned = manager.spawnAndAttach(desktop, shellInput);
     expect(spawned).not.toBeNull();
     if (!spawned) return;
-    manager.promote(desktop, false);
+    void manager.promote(desktop, false);
     manager.resize(desktop, 120, 40);
-    // A mobile constrains the PTY to its narrow viewport.
+
     const mobile = createFakeSocket();
     manager.attach(mobile, spawned.id);
-    manager.promote(mobile, false);
+    void manager.promote(mobile, false);
     manager.resize(mobile, 40, 24);
+    vi.spyOn(spawned.session, "write").mockImplementation(() => {});
     sent.length = 0;
-    // A second desktop joins — wider than the mobile's limit, so the min stays
-    // 40 and recomputeResize doesn't broadcast. The joiner must still learn it's
-    // constrained via the seed, or it would render no mask over its wide grid.
+
+    manager.writeInput(mobile, "x");
+
+    const mobileSizeFrames = sent.filter(
+      (entry) =>
+        entry.payload.type === "pty-size" && entry.payload.cols === 40 && entry.payload.rows === 24,
+    );
+    expect(mobileSizeFrames.some((entry) => entry.ws === desktop)).toBe(true);
+    expect(mobileSizeFrames.some((entry) => entry.ws === mobile)).toBe(true);
+  });
+
+  it("seeds a wider joiner with the active viewer's current size", () => {
+    const sent: { ws: ClientSocket; payload: ServerToClientMessage }[] = [];
+    manager = new SessionManager({
+      sendControl: (ws, payload) => sent.push({ ws, payload }),
+      hooks: noopHooks,
+    });
+    const desktop = createFakeSocket();
+    const spawned = manager.spawnAndAttach(desktop, shellInput);
+    expect(spawned).not.toBeNull();
+    if (!spawned) return;
+    void manager.promote(desktop, false);
+    manager.resize(desktop, 120, 40);
+
+    const mobile = createFakeSocket();
+    manager.attach(mobile, spawned.id);
+    void manager.promote(mobile, false);
+    manager.resize(mobile, 40, 24);
+    manager.setClientFocus(mobile, true);
+    sent.length = 0;
+
     const secondDesktop = createFakeSocket();
     manager.attach(secondDesktop, spawned.id);
-    manager.promote(secondDesktop, false);
+    void manager.promote(secondDesktop, false);
     manager.resize(secondDesktop, 120, 40);
-    const seeded = sent.filter(
-      (entry) =>
-        entry.ws === secondDesktop &&
-        entry.payload.type === "pty-size" &&
-        entry.payload.cols === 40 &&
-        entry.payload.rows === 24,
-    );
-    expect(seeded.length).toBeGreaterThan(0);
+
+    expect(
+      sent.some(
+        (entry) =>
+          entry.ws === secondDesktop &&
+          entry.payload.type === "pty-size" &&
+          entry.payload.cols === 40 &&
+          entry.payload.rows === 24,
+      ),
+    ).toBe(true);
   });
 
   it("a follow (grid tile) client never clamps a wider full viewer", () => {

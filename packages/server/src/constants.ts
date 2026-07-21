@@ -8,6 +8,8 @@ export const DEFAULT_SHELL_FALLBACK = "/bin/sh";
 export const TERM_TYPE = "xterm-256color";
 export const COLORTERM_VALUE = "truecolor";
 export const LOCALTERM_VALUE = "1";
+// launchd omits locale variables; pbcopy otherwise treats UTF-8 terminal text as MacRoman.
+export const DEFAULT_MACOS_PTY_LOCALE = "C.UTF-8";
 
 // Base PATH for user shells (PTYs, "Open in…"). They set up their own PATH via
 // rc files like any login shell, so they must not inherit the daemon's baked
@@ -51,6 +53,21 @@ export const CAFFEINATE_AUTO_DEFAULT_COMMANDS: readonly string[] = [
 ];
 export const CAFFEINATE_PREFERENCES_FILE_VERSION = 4;
 export const DAEMON_CONFIG_FILE_VERSION = 1;
+// Persisted workspace manifest (~/.localterm/workspace.json): per owner +
+// per browser-profile windowId, the list of open tabs ({cwd, shell}) so the
+// daemon can reopen them via CDP on the next start. Excludes automation-run
+// tabs (one-shot) and dormant/orphaned shells (no attached viewer).
+export const WORKSPACE_FILENAME = "workspace.json";
+export const WORKSPACE_FILE_VERSION = 1;
+// Quiet window after the first desktop tab pairs with CDP before the daemon
+// reconciles the persisted manifest against reconnected tabs and opens the
+// missing ones — long enough for surviving tabs (a daemon restart with the
+// browser left open) to reattach and be counted, short enough to feel
+// instant on a fresh start (only the bootstrap tab is open).
+export const WORKSPACE_RESTORE_SETTLE_MS = 2_000;
+// Debounce for persisting the live workspace manifest to disk on attach/
+// detach churn, so a flurry of tab opens/closes writes once, not per event.
+export const WORKSPACE_SNAPSHOT_DEBOUNCE_MS = 2_000;
 // Automatic detection is event-driven (no timer): a `ps` snapshot is taken only
 // in response to a foreground change or a session connect/disconnect. This
 // debounce window coalesces a burst of such events into a single snapshot; it
@@ -116,6 +133,7 @@ export const PROCESSES_FILE_VERSION = 1;
 export const PROCESSES_FILENAME = "processes.json";
 export const THEMES_FILENAME = "themes.json";
 export const THEMES_FILE_VERSION = 1;
+export const HERDR_THEME_SYNC_DEBOUNCE_MS = 75;
 export const FONTS_FILENAME = "fonts.json";
 export const FONTS_FILE_VERSION = 1;
 export const SECRETS_SHIMS_DIRNAME = "shims";
@@ -188,6 +206,7 @@ export const TITLE_MAX_PATH_SEGMENTS = 1;
 export const PTY_ENV_DENYLIST = [
   "LOCALTERM_DAEMON_CHILD",
   "LOCALTERM_INITIAL_COMMAND",
+  "LOCALTERM_SESSION_ID",
   "TERM_PROGRAM",
   "TERM_PROGRAM_VERSION",
   "TERM_SESSION_ID",
@@ -206,6 +225,11 @@ export const PTY_ENV_DENYLIST = [
 
 export const MAX_INPUT_BYTES = 64 * 1024;
 export const MAX_OUTPUT_BYTES = 1 * 1024 * 1024;
+// Cap for a pasted/shared image upload (POST /api/upload-image). A phone
+// screenshot is ~1-3 MB and a photo ~5-12 MB; 32 MB is generous for any real
+// raster while rejecting an accidental or hostile dump that would wedge the
+// multipart parse.
+export const MAX_IMAGE_UPLOAD_BYTES = 32 * 1024 * 1024;
 export const MAX_FOREGROUND_LENGTH = 256;
 export const MAX_TITLE_LENGTH = 4 * 1024;
 export const MAX_NOTIFICATION_LENGTH = 1024;
@@ -229,22 +253,26 @@ export const HOOKED_SHELL_NAMES = new Set(["zsh", "bash", "fish"]);
 export const WS_OUTBOUND_PAUSE_HIGH_WATER_BYTES = 4 * 1024 * 1024;
 export const WS_OUTBOUND_RESUME_LOW_WATER_BYTES = 1 * 1024 * 1024;
 export const WS_OUTBOUND_DRAIN_POLL_MS = 50;
+export const WS_PENDING_CLIENT_MAX_BYTES = WS_OUTBOUND_PAUSE_HIGH_WATER_BYTES;
+export const WS_PENDING_CLIENT_MAX_CONTROL_MESSAGES = 256;
 export const WS_BACKPRESSURE_THRESHOLD_BYTES = 64 * 1024 * 1024;
 
-// Output batch early-flush threshold. The OUTPUT_BATCH_WINDOW_MS timer is
-// authoritative for low-throughput streams (keystroke echo, TUI redraws of
-// 3–6KB on a 120×40 terminal): it coalesces the per-chunk data events of one
-// logical frame into a single message, which xterm.js parses atomically —
+// Output batch early-flush threshold. DEC synchronized-output redraws flush at
+// their explicit DECRST 2026 boundary; the OUTPUT_BATCH_WINDOW_MS timer remains
+// authoritative for low-throughput streams without that boundary (keystroke
+// echo and unsynchronized TUI redraws of 3–6KB on a 120×40 terminal). It
+// coalesces the per-chunk data events of one logical frame into a single
+// message, which xterm.js parses atomically —
 // splitting a frame causes the half-erased frame to render and flicker (visible
-// on every keypress in cmd/Claude Code). TUI frames never approach this
-// threshold, so the timer governs them — EXCEPT a full-screen repaint of a
-// large session (a big pi/Claude Code conversation, a wide terminal with heavy
-// SGR styling), which can exceed the old 32KB threshold and split across
-// messages. Over a bandwidth-limited link each split arrives as its own atomic
-// WebSocket message and xterm paints it separately — the visible top-to-bottom
-// crawl. Raising the threshold to 64KB keeps a big single redraw as one message
-// (the browser receives it atomically, one paint) while staying under xterm's
-// 12ms parse-yield budget (a 64KB write parses in ~4–6ms, measured), so a
+// on every keypress in cmd/Claude Code). Unsynchronized TUI frames rarely
+// approach this threshold, so the timer governs them — EXCEPT a full-screen
+// repaint of a large session (a big pi/Claude Code conversation, a wide terminal
+// with heavy SGR styling), which can exceed the old 32KB threshold and split
+// across messages. Over a bandwidth-limited link each split arrives as its own
+// atomic WebSocket message and xterm paints it separately — the visible
+// top-to-bottom crawl. Raising the threshold to 64KB keeps a big single redraw
+// as one message (the browser receives it atomically, one paint) while staying
+// under xterm's 12ms parse-yield budget (a 64KB write parses in ~4–6ms, measured), so a
 // single message never spills to xterm's async drain (no partial paint).
 //
 // This threshold also governs high-throughput output (cat of large files, full
@@ -263,15 +291,16 @@ export const WS_BACKPRESSURE_THRESHOLD_BYTES = 64 * 1024 * 1024;
 // the 122ms hibernation stalls.
 export const OUTPUT_BATCH_FLUSH_BYTES = 64 * 1024;
 
-// Output batching window. The kernel PTY delivers child writes in 1024-byte
-// chunks on macOS, and node-pty emits each chunk as a separate data event in
+// Output batching fallback for streams without an explicit synchronized-output
+// end boundary. The kernel PTY delivers child writes in 1024-byte chunks on
+// macOS, and node-pty emits each chunk as a separate data event in
 // its own event loop iteration — a setImmediate scheduled on the first chunk
 // fires before the remaining chunks of the same child write are read. That
 // split a single ink/TUI redraw frame (erase + repaint, ~3KB) across multiple
 // WebSocket messages, and xterm.js rendering between them flashed the
 // half-erased frame (visible flicker in cmd/Claude Code on every keypress).
-// The window RESETS on every chunk (onSessionOutput clears and re-arms the
-// timer per data event), so it flushes OUTPUT_BATCH_WINDOW_MS after the LAST
+// The window RESETS on every chunk (onSessionOutput refreshes the existing
+// timer), so it flushes OUTPUT_BATCH_WINDOW_MS after the LAST
 // chunk of a burst — not a fixed window after the first. A full-screen
 // repaint of a large session emits over more than the window; a one-shot
 // window split it mid-redraw, and over a bandwidth-limited link each split
@@ -310,6 +339,7 @@ export const WS_OUTPUT_BROTLI = 0x02;
 export const WS_OUTPUT_BROTLI_CTX = 0x03;
 export const WS_OUTPUT_CTX_HEADER_BYTES = 5; // 0x03 + 4-byte LE raw size
 export const WS_OUTPUT_COMPRESS_THRESHOLD_BYTES = 256;
+export const WS_OUTPUT_CLIENT_QUEUE_MAX_BYTES = 16 * 1024 * 1024;
 export const WS_OUTPUT_BROTLI_QUALITY = 6;
 export const WS_OUTPUT_GZIP_LEVEL = 3;
 
@@ -376,6 +406,8 @@ export const SESSION_ACTIVITY_WINDOW_MS = 750;
 // 2s clears even a flaky relayed tailnet with room to spare while staying well
 // under any user-perceptible delay for the back-compat fallback.
 export const SESSION_PENDING_PROMOTE_TIMEOUT_MS = 2_000;
+export const INITIAL_CLIENT_ACTIVITY_SEQUENCE = 0;
+export const CLIENT_ACTIVITY_SEQUENCE_INCREMENT = 1;
 // Query param a reconnecting or switching client carries to attach to a live
 // PTY by id instead of spawning a fresh shell.
 export const SESSION_ID_QUERY_PARAM = "sid";
@@ -423,7 +455,23 @@ export const CDP_HEARTBEAT_TIMEOUT_MS = 60_000;
 // devtools fork) replies in time and is reused, not torn down. Under the
 // interval so a probe never overlaps the next tick.
 export const CDP_HEARTBEAT_GRACE_MS = 15_000;
-export const FOREGROUND_POLL_INTERVAL_MS = 250;
+// Dia (The Browser Company) is the only Chromium browser that gates the CDP
+// WebSocket open behind an "Allow debugging connection?" prompt (Return =
+// Allow). When auto-allow is on and the WS is still CONNECTING past this delay,
+// the prompt is up: the daemon fires one Return at the Dia process via osascript
+// so its persistent CDP socket connects with no manual click. Measured from
+// WebSocket creation — a live WS opens in ~100ms, so "still CONNECTING at
+// 600ms" reliably means the prompt is blocking it.
+export const CDP_AUTO_ALLOW_DELAY_MS = 600;
+// Foreground value reported when a TUI is on the alternate screen but no shell
+// hook named the program. Shells without a preexec hook (sh/dash) have no
+// foreground-start signal, so the alt-screen enter/exit is the only marker
+// that a program is running — enough to keep a closed tab from reaping a
+// running editor and to hold the favicon "alive". Never displayed: clients
+// treat foreground purely as `!== null` (the favicon alive/idle flag), so an
+// opaque marker suffices. Hooked shells (zsh/bash/fish) name the program via
+// preexec and take precedence over this fallback.
+export const ALT_SCREEN_FOREGROUND = "(alt-screen)";
 // Hard ceiling for server.stop() — clients get terminated, then the http
 // server is given this long to actually close before we resolve anyway. Keeps
 // the daemon's SIGTERM path bounded so the CLI's force-exit fallback never
@@ -437,6 +485,15 @@ export const HTTP_STATUS_BAD_REQUEST = 400;
 export const HTTP_STATUS_ACCEPTED = 202;
 export const HTTP_STATUS_CONFLICT = 409;
 export const HTTP_STATUS_BAD_GATEWAY = 502;
+export const HTTP_STATUS_PAYLOAD_TOO_LARGE = 413;
+export const HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE = 415;
+
+// /api/file/content text preview. A hard byte cap keeps a giant generated file
+// from ballooning the response, and the NUL-byte sample (git's binary-detection
+// window) rejects binaries so the preview never shows mojibake for an image or
+// compiled artifact.
+export const FILE_PREVIEW_MAX_BYTES = 1_000_000;
+export const FILE_PREVIEW_BINARY_SAMPLE_BYTES = 8_000;
 
 // Git diff endpoints. The summary endpoint is polled by the browser every few
 // seconds, so every limit here exists to keep one poll cheap and to keep a
@@ -451,6 +508,8 @@ export const GIT_EMPTY_TREE_HASH = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 // from the read prefix and drop their patch.
 export const GIT_MAX_UNTRACKED_FILES = 200;
 export const GIT_MAX_UNTRACKED_FILE_BYTES = 1 * 1024 * 1024;
+export const GIT_MAX_UNTRACKED_TOTAL_BYTES = 10 * 1024 * 1024;
+export const GIT_UNTRACKED_PATHS_MAX_BYTES = 4 * 1024 * 1024;
 // Binary sniff window: a NUL byte in the first 8KB marks a file as binary,
 // matching git's own heuristic (buffer_is_binary checks the first 8000 bytes).
 export const GIT_BINARY_SNIFF_BYTES = 8000;
@@ -467,12 +526,20 @@ export const GIT_DIRTY_THROTTLE_MS = 100;
 // Invalidated on a git-dirty signal; this TTL is the backstop for a missed
 // invalidation so a stale tree can't be served indefinitely.
 export const GIT_CACHE_TTL_MS = 5_000;
+export const GIT_DIFF_CACHE_MAX_ENTRIES = 16;
+export const GIT_DIFF_CACHE_MAX_BYTES = 32 * 1024 * 1024;
 // How long a detected PR stays cached per (cwd, branch). PR state changes on
 // remote events (push/merge/retarget), not on local working-tree edits, so this
 // is deliberately longer than the diff cache TTL and is NOT invalidated by the
 // git-dirty signal. The branch is part of the cache key, so switching branches
 // naturally misses and refetches.
 export const GIT_PR_CACHE_TTL_MS = 60_000;
+export const GIT_PR_CACHE_MAX_ENTRIES = 256;
+export const GIT_PR_FETCH_LIMIT = 30;
+export const GIT_GITHUB_REQUEST_TIMEOUT_MS = 8_000;
+export const GITHUB_TOKEN_CACHE_TTL_MS = 5 * 60 * 1000;
+export const GITHUB_TOKEN_CACHE_MAX_ENTRIES = 64;
+export const GITHUB_HOSTS_FILE_MAX_BYTES = 1 * 1024 * 1024;
 
 // "Branch" diff mode compares the working tree against a base branch (via
 // merge-base). The GitHub REST API is consulted to discover the current branch's
@@ -484,10 +551,13 @@ export const GIT_MAX_REF_LENGTH = 255;
 // Cap the branch list returned for the base-branch picker so a repo with
 // thousands of remote refs can't bloat the response.
 export const GIT_MAX_BRANCHES = 500;
+export const GIT_WATCHER_MAX_REFS = 10_000;
 // Safety ceiling on a single git subprocess: kills a hung invocation (a
 // pathological repo, or git blocked on something GIT_TERMINAL_PROMPT=0 didn't
 // suppress) so the daemon's event loop can't be held indefinitely.
 export const GIT_SPAWN_TIMEOUT_MS = 30_000;
+export const GIT_SPAWN_MAX_STDOUT_BYTES = 16 * 1024 * 1024;
+export const GIT_SPAWN_MAX_STDERR_BYTES = 1 * 1024 * 1024;
 
 // Per-repo worktree preferences (~/.localterm/worktree-configs/<repo-id>.json):
 // the setup script to run in each fresh worktree, the custom "Open in…"
@@ -643,6 +713,7 @@ export const MAX_AUTOMATION_FINDINGS_LENGTH = 8000;
 // transcript and hide thinking behind a toggle). The array branch is bounded
 // by entry count here; the agent runner bounds total bytes to the value below.
 export const MAX_AUTOMATION_LOG_LENGTH = 65536;
+export const AUTOMATION_CUSTOM_HARNESS_CAPTURE_BYTES = MAX_AUTOMATION_LOG_LENGTH;
 // Defensive cap on the number of structured log entries per agent run.
 export const MAX_AUTOMATION_LOG_ENTRIES = 500;
 // Truncated tool result text stored in a structured log entry (tool calls can
@@ -657,6 +728,10 @@ export const MAX_AUTOMATION_TOOL_INPUT_LENGTH = 200;
 // transcript returned over the API (which isn't stored in our file).
 export const AUTOMATION_SESSION_TOOL_MAX_LINES = 2000;
 export const AUTOMATION_SESSION_TOOL_MAX_BYTES = 50_000;
+export const AUTOMATION_SESSION_MAX_LINE_BYTES = 2 * 1024 * 1024;
+export const AUTOMATION_SESSION_MAX_ENTRIES = 10_000;
+export const AUTOMATION_SESSION_MAX_RETAINED_BYTES = 16 * 1024 * 1024;
+export const AUTOMATION_SESSION_MAX_PENDING_TOOL_CALLS = 1_000;
 // Cap on the per-run `changedFiles` list (git status diff before/after). A
 // sprawling run won't blow up the history file.
 export const MAX_AUTOMATION_CHANGED_FILES = 64;
@@ -668,6 +743,12 @@ export const AUTOMATION_AGENT_SESSIONS_DIRNAME = "agent-sessions";
 // model that never stops) is killed and marked failed rather than leaking a
 // process and a "running" run forever.
 export const AUTOMATION_AGENT_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+export const AUTOMATION_AGENT_FORCE_KILL_DELAY_MS = 3_000;
+export const AUTOMATION_AGENT_COMPACT_TIMEOUT_MS = 60_000;
+export const AUTOMATION_AGENT_COMPACT_STDERR_BYTES = 4 * 1024;
+export const AUTOMATION_AGENT_COMPACT_ERROR_PREVIEW_LENGTH = 500;
+export const AGENT_SKILL_CACHE_TTL_MS = 5 * 60 * 1000;
+export const AGENT_SKILL_CACHE_MAX_ENTRIES = 64;
 
 export const WS_READY_STATE_OPEN = 1;
 export const WS_CLOSE_POLICY_VIOLATION = 1008;

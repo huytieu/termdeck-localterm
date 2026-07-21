@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
+import type { WebglAddon } from "@xterm/addon-webgl";
 import { SettingsMenu } from "@/components/settings-menu";
+import { useDaemonSettings } from "@/hooks/use-daemon-settings";
 import { useTerminalSettings } from "@/hooks/use-terminal-settings";
-import { fetchDaemonConfig } from "@/utils/fetch-daemon-config";
-import { updateDaemonConfig } from "@/utils/update-daemon-config";
-import { fetchServerHealth } from "@/utils/fetch-server-health";
-import { connectCdp } from "@/utils/connect-cdp";
-import { openInspectPage } from "@/utils/open-inspect-page";
 import { useUpdateStatus } from "@/hooks/use-update-status";
 import type { LocalEcho } from "@/lib/local-echo";
 
@@ -17,11 +14,13 @@ import type { LocalEcho } from "@/lib/local-echo";
 // localStorage + the daemon (themes/fonts) and the cross-tab `storage`
 // subscription, so a change here propagates live to every open terminal tab
 // without a terminal of its own. Daemon-global values (CDP port/status, grace,
-// detected shell) are fetched on mount, matching what the terminal gear does
-// when it opens. Session-specific info (the "Shell" section) is omitted.
+// workspace restore, detected shell) come from `useDaemonSettings`, hydrated on
+// mount — matching what the terminal gear does when it opens. Session-specific
+// info (the "Shell" section) is omitted.
 export const SettingsPanel = () => {
   const terminalRef = useRef<XtermTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const webglAddonRef = useRef<WebglAddon | null>(null);
   const localEchoRef = useRef<LocalEcho | null>(null);
 
   const {
@@ -29,6 +28,7 @@ export const SettingsPanel = () => {
     activeFontId,
     activeNerdFontEnabled,
     activeLigaturesEnabled,
+    activeMuteEmojiColors,
     activeFontSize,
     activeLineHeight,
     activeCursorStyle,
@@ -40,6 +40,7 @@ export const SettingsPanel = () => {
     activePaddingY,
     activeDefaultCwd,
     activeDefaultShell,
+    activeMobileResume,
     activeCustomFontFamily,
     activeCustomThemes,
     setPreviewThemeId,
@@ -49,6 +50,7 @@ export const SettingsPanel = () => {
     handleFontChange,
     handleNerdFontEnabledChange,
     handleLigaturesEnabledChange,
+    handleMuteEmojiColorsChange,
     handleFontSizeChange,
     handleLineHeightChange,
     handleCursorStyleChange,
@@ -60,78 +62,44 @@ export const SettingsPanel = () => {
     handlePaddingYChange,
     handleDefaultCwdChange,
     handleDefaultShellChange,
+    handleMobileResumeChange,
     handleCustomFontFamilyChange,
     handleImportTheme,
     handleDeleteCustomTheme,
-  } = useTerminalSettings({ terminalRef, fitAddonRef, terminalReady: false, localEchoRef });
+  } = useTerminalSettings({
+    terminalRef,
+    fitAddonRef,
+    webglAddonRef,
+    terminalReady: false,
+    localEchoRef,
+  });
 
-  const [cdpPort, setCdpPort] = useState<number | null>(null);
-  const [graceSeconds, setGraceSeconds] = useState<number | null>(null);
-  const [detectedDefaultShell, setDetectedDefaultShell] = useState<string>("");
-  const [cdpConnecting, setCdpConnecting] = useState(false);
-  const [cdpStatus, setCdpStatus] = useState<{
-    connected: boolean;
-    browser?: string;
-    error?: string;
-  } | null>(null);
+  const {
+    cdpPort,
+    graceSeconds,
+    workspaceRestore,
+    detectedDefaultShell,
+    cdpStatus,
+    cdpConnecting,
+    handleCdpPortChange,
+    handleGraceSecondsChange,
+    handleWorkspaceRestoreChange,
+    handleCdpConnect,
+    handleOpenInspect,
+    loadDaemonSettings,
+  } = useDaemonSettings();
+
   const [notificationsPermission, setNotificationsPermission] = useState<
     NotificationPermission | "unsupported"
   >("Notification" in window ? Notification.permission : "unsupported");
 
   const { updateAvailable, latest: latestUpdateVersion } = useUpdateStatus();
 
-  const refreshCdpStatus = useCallback(() => {
-    void fetchServerHealth().then((health) => {
-      if (health) setCdpStatus(health.cdp);
-    });
-  }, []);
-
   // Hydrate the daemon-global fields on mount (the terminal gear does this when
   // the modal opens); the appearance prefs come from useTerminalSettings.
   useEffect(() => {
-    void fetchDaemonConfig().then((config) => {
-      if (config) {
-        setCdpPort(config.cdpPort);
-        setGraceSeconds(config.graceSeconds);
-        setDetectedDefaultShell(config.defaultShell);
-      }
-    });
-    refreshCdpStatus();
-  }, [refreshCdpStatus]);
-
-  const handleCdpPortChange = useCallback((next: number | null) => {
-    setCdpPort(next);
-    void updateDaemonConfig({ cdpPort: next }).then((confirmed) => {
-      if (confirmed) setCdpPort(confirmed.cdpPort);
-    });
-  }, []);
-
-  const handleGraceSecondsChange = useCallback((next: number | null) => {
-    setGraceSeconds(next);
-    void updateDaemonConfig({ graceSeconds: next }).then((confirmed) => {
-      if (confirmed) setGraceSeconds(confirmed.graceSeconds);
-    });
-  }, []);
-
-  const handleCdpConnect = useCallback(() => {
-    setCdpConnecting(true);
-    void connectCdp().then((result) => {
-      setCdpConnecting(false);
-      if (result) {
-        setCdpStatus({
-          connected: result.connected,
-          browser: result.browser,
-          error: result.error,
-        });
-      } else {
-        refreshCdpStatus();
-      }
-    });
-  }, [refreshCdpStatus]);
-
-  const handleOpenInspect = useCallback(() => {
-    void openInspectPage();
-  }, []);
+    loadDaemonSettings();
+  }, [loadDaemonSettings]);
 
   const handleNotificationsPermissionRequest = useCallback(() => {
     if (!("Notification" in window)) return;
@@ -158,6 +126,8 @@ export const SettingsPanel = () => {
       onNerdFontEnabledChange={handleNerdFontEnabledChange}
       ligaturesEnabled={activeLigaturesEnabled}
       onLigaturesEnabledChange={handleLigaturesEnabledChange}
+      muteEmojiColors={activeMuteEmojiColors}
+      onMuteEmojiColorsChange={handleMuteEmojiColorsChange}
       fontSize={activeFontSize}
       onFontSizeChange={handleFontSizeChange}
       lineHeight={activeLineHeight}
@@ -181,6 +151,8 @@ export const SettingsPanel = () => {
       onOpenInspect={handleOpenInspect}
       graceSeconds={graceSeconds}
       onGraceSecondsChange={handleGraceSecondsChange}
+      workspaceRestore={workspaceRestore}
+      onWorkspaceRestoreChange={handleWorkspaceRestoreChange}
       paddingX={activePaddingX}
       onPaddingXChange={handlePaddingXChange}
       paddingY={activePaddingY}
@@ -190,6 +162,8 @@ export const SettingsPanel = () => {
       defaultShell={activeDefaultShell}
       onDefaultShellChange={handleDefaultShellChange}
       detectedDefaultShell={detectedDefaultShell}
+      mobileResume={activeMobileResume}
+      onMobileResumeChange={handleMobileResumeChange}
       notificationsPermission={notificationsPermission}
       onNotificationsPermissionRequest={handleNotificationsPermissionRequest}
       updateAvailable={updateAvailable}

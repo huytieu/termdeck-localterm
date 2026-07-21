@@ -9,8 +9,12 @@ export const TERMINAL_FONT_SIZE_MIN_PX = 9;
 export const TERMINAL_FONT_SIZE_MAX_PX = 24;
 export const TERMINAL_FONT_SIZE_STEP_PX = 1;
 export const TERMINAL_TAP_MOVEMENT_THRESHOLD_PX = 10;
-export const TERMINAL_KEYBOARD_HIDE_VIEWPORT_GROWTH_PX = 150;
+export const TERMINAL_CURSOR_KEYBOARD_TAP_TARGET_PX = 44;
+export const TERMINAL_KEYBOARD_VIEWPORT_HEIGHT_CHANGE_PX = 150;
 export const TERMINAL_VIEWPORT_WIDTH_STABLE_PX = 20;
+export const XTERM_DEFAULT_SCROLL_SENSITIVITY = 1;
+export const XTERM_TRACKPAD_WHEEL_DELTA_THRESHOLD_PX = 50;
+export const XTERM_TRACKPAD_WHEEL_SCALE = 0.3;
 export const DEFAULT_TERMINAL_LINE_HEIGHT = 1.2;
 // xterm.js refuses lineHeight < 1 (throws "lineHeight cannot be less than 1").
 export const TERMINAL_LINE_HEIGHT_MIN = 1.0;
@@ -22,9 +26,14 @@ export const TERMINAL_PADDING_MIN_PX = 0;
 export const TERMINAL_PADDING_MAX_PX = 48;
 export const TERMINAL_PADDING_STEP_PX = 1;
 export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
+export const DEFAULT_MUTE_EMOJI_COLORS = true;
 export const DEFAULT_TERMINAL_LOCAL_ECHO = true;
 export const DEFAULT_TERMINAL_SCROLL_ON_USER_INPUT = true;
 export const FALLBACK_TERMINAL_BACKGROUND_HEX = "#101010";
+export const FALLBACK_TERMINAL_FOREGROUND_HEX = "#ffffff";
+export const DARK_TERMINAL_THEME_LIGHTNESS_THRESHOLD_PERCENT = 50;
+export const DISABLED_TERMINAL_MINIMUM_CONTRAST_RATIO = 1;
+export const LIGHT_TERMINAL_MINIMUM_CONTRAST_RATIO = 4.5;
 export const DEFAULT_DOCUMENT_TITLE = "localterm";
 export const DEAD_SESSION_TITLE_PREFIX = "† ";
 // Title and per-session tag for desktop notifications shown via the service
@@ -36,6 +45,12 @@ export const DISCONNECT_MODAL_THRESHOLD_FAILURES = 2;
 export const RESTART_COMMAND = "npx @monotykamary/localterm@latest start";
 export const COPY_FEEDBACK_MS = 1500;
 export const RETRY_BUTTON_FEEDBACK_MS = 800;
+// A pasted/shared image upload can take a few seconds on a slow mobile link;
+// keep the "pasting image…" / outcome toast up briefly once it settles.
+export const PASTED_IMAGE_FEEDBACK_MS = 1800;
+// Stable id for the pasted-image status toast so a follow-up (done/error) upserts
+// the in-flight "Pasting image…" toast in place instead of stacking a new one.
+export const PASTED_IMAGE_TOAST_ID = "pasted-image";
 export const HAPTIC_TAP_MS = 10;
 export const RECONNECT_FAST_POLL_INTERVAL_MS = 250;
 export const RECONNECT_FAST_POLL_DURATION_MS = 5000;
@@ -53,6 +68,7 @@ export const FAVICON_READY_DEBOUNCE_MS = 750;
 export const FAVICON_DEAD_OPACITY = 0.35;
 
 export const COMMAND_PALETTE_CLOSE_TRANSITION_MS = 150;
+export const KEYBOARD_SHORTCUTS_MODAL_CLOSE_TRANSITION_MS = 150;
 // Shared max height for the top-anchored palette-style overlays (command
 // palette + sessions modal) so the two open at the same height and don't jump
 // when one replaces the other. 400px mirrors the original command-palette cap
@@ -85,6 +101,11 @@ export const DIFF_VIEWER_INITIAL_LINE_LIMIT = 2000;
 export const DIFF_VIEWER_RENDER_CHUNK = 2000;
 export const SIDEBAR_COLLAPSE_WIDTH_PX = 768;
 export const DIFF_VIEWER_SIDEBAR_WIDTH_PX = 288;
+export const DIFF_VIEWER_FILE_ROW_HEIGHT_PX = 32;
+export const DIFF_VIEWER_FILE_LIST_OVERSCAN_ROWS = 12;
+export const DIFF_VIEWER_SPLIT_WHEEL_LINE_PX = 20;
+export const DIFF_VIEWER_SPLIT_WHEEL_PAGE_PX = 300;
+export const DIFF_VIEWER_COMPACT_HEADER_PADDING_PX = 24;
 export const AUTOMATIONS_SIDEBAR_COLLAPSE_WIDTH_PX = 768;
 export const AUTOMATIONS_SIDEBAR_WIDTH_PX = 256;
 export const DIFF_VIEW_MODE_STORAGE_KEY = "localterm:diff-view-mode";
@@ -93,6 +114,10 @@ export const PATCH_PREFETCH_NEIGHBOR_RADIUS = 5;
 
 export const AUTOMATIONS_SORT_STORAGE_KEY = "localterm:automations-sort";
 export const AUTOMATIONS_SORT_DEFAULT = "last-run" as const;
+export const AUTOMATION_RUN_LIMIT_DEFAULT_COUNT = 20;
+export const AUTOMATION_FINDINGS_PREVIEW_MAX_CHARACTERS = 140;
+export const AUTOMATIONS_LIST_ROW_HEIGHT_PX = 44;
+export const AUTOMATIONS_LIST_OVERSCAN_ROWS = 8;
 export const AUTOMATIONS_RELATIVE_TIME_REFRESH_MS = 30_000;
 // While the modal is open, re-fetch automations on this cadence so a run that
 // finishes flips to its final status even if the WS broadcast was missed (a
@@ -112,6 +137,11 @@ export const TRIAGE_WEEK_BAND_DAYS = 7;
 
 export const WORKTREES_MODAL_CLOSE_TRANSITION_MS = 150;
 export const WORKTREES_LIST_ROW_HEIGHT_PX = 56;
+export const WORKTREES_LIST_OVERSCAN_COUNT = 8;
+export const WORKTREE_SHORT_SHA_LENGTH = 7;
+export const WORKTREE_COMMAND_ID_RANDOM_RADIX = 36;
+export const WORKTREE_COMMAND_ID_RANDOM_START_INDEX = 2;
+export const MINIMUM_PULL_REQUEST_NUMBER = 1;
 // Min height for the error block (stacked Alert + message + Retry button needs
 // ~84px of vertical room). Preserves the original min-h-32 (8rem) comfort.
 export const WORKTREES_MESSAGE_BLOCK_MIN_HEIGHT_PX = 128;
@@ -124,8 +154,9 @@ export const WORKTREES_MODAL_MAX_HEIGHT_REM = 40;
 export const WORKTREES_POLL_INTERVAL_MS = 2000;
 
 export const SESSIONS_MODAL_CLOSE_TRANSITION_MS = 150;
-// Each session row is a single-line command-palette-style option (icon + title
-// + right detail), matching COMMAND_ITEM_CLASSES' py-2 text-sm height.
+// Each session row is a single-line option (icon + title + right detail). The
+// 36px is py-2 (16px) + the 20px trailing action slot (Check/kill button), so
+// it holds with text-xs row text.
 export const SESSIONS_LIST_ROW_HEIGHT_PX = 36;
 // Polled while the sessions modal is open so the list reflects attaches,
 // detaches, and grace reaps in near-realtime. Short enough to feel live, long
@@ -176,10 +207,10 @@ export const SESSIONS_PEER_FACE_RADIUS_PCT = "30%";
 // on an idle open while still surfacing a dev server starting/stopping live.
 export const PORTS_MODAL_CLOSE_TRANSITION_MS = 150;
 export const PORTS_POLL_INTERVAL_MS = 2000;
-// Each port row matches the sessions/command-palette single-line option
-// (py-2 text-sm = 36px), so the modal reuses the same per-row height to size
-// its height-reserved list container (no per-row measurement needed — a row's
-// title truncates to one line, so the height is stable).
+// Each port row matches the sessions single-line option (py-2 + the 20px
+// trailing stop slot = 36px), so the modal reuses the same per-row height to
+// size its height-reserved list container (no per-row measurement needed — a
+// row's title truncates to one line, so the height is stable).
 export const PORTS_LIST_ROW_HEIGHT_PX = SESSIONS_LIST_ROW_HEIGHT_PX;
 // Min height reserved for the ports modal's error/empty block (a centered
 // message + Retry button, or a two-line empty hint) so the palette modal body
@@ -207,6 +238,7 @@ export const SECRETS_BODY_MIN_HEIGHT_PX = 112;
 // corrects each row to its measured height, so this only sizes the first paint
 // before measurement.
 export const SECRETS_LIST_ROW_HEIGHT_PX = 44;
+export const SECRETS_LIST_OVERSCAN_COUNT = 8;
 // Quiet-zone margin (QR modules) around the share QR so cameras lock on
 // without edge bleed.
 export const QR_CODE_MARGIN_MODULES = 2;
@@ -225,14 +257,21 @@ export const TOOLTIP_SIDE_OFFSET_PX = 8;
 export const NUMBER_STEPPER_SCRUB_PIXELS_PER_STEP = 5;
 
 export const ENTER_KEY_CODE = 13;
-export const KEYBOARD_MODIFIER_SHIFT_BIT = 1;
-export const KEYBOARD_MODIFIER_ALT_BIT = 2;
-export const KEYBOARD_MODIFIER_CTRL_BIT = 4;
-export const KEYBOARD_MODIFIER_META_BIT = 8;
+export const TERMINAL_ESCAPE_SEQUENCE = String.fromCharCode(27);
+export const TERMINAL_TAB_SEQUENCE = "\t";
+export const TERMINAL_BACK_TAB_SEQUENCE = TERMINAL_ESCAPE_SEQUENCE + "[Z";
+export const TERMINAL_BACKSPACE_SEQUENCE = String.fromCharCode(127);
+export const TERMINAL_CARRIAGE_RETURN_SEQUENCE = String.fromCharCode(ENTER_KEY_CODE);
+export const TERMINAL_CURSOR_WORD_LEFT_SEQUENCE = TERMINAL_ESCAPE_SEQUENCE + "b";
+export const TERMINAL_CURSOR_WORD_RIGHT_SEQUENCE = TERMINAL_ESCAPE_SEQUENCE + "f";
+export const TERMINAL_CURSOR_LINE_START_SEQUENCE = String.fromCharCode(1);
+export const TERMINAL_CURSOR_LINE_END_SEQUENCE = String.fromCharCode(5);
+export const TERMINAL_DELETE_TO_LINE_START_SEQUENCE = String.fromCharCode(21);
 // Kitty keyboard protocol "Disambiguate escape codes" flag (bit 0). Active means
 // modifier+key combos must be reported as `CSI <keycode>;<mods+1> u` instead of
 // the legacy bare control byte (which can't distinguish e.g. Enter vs Shift+Enter).
 export const KITTY_KEYBOARD_DISAMBIGUATE_FLAG = 1;
+export const KITTY_KEYBOARD_REPORT_EVENT_TYPES_FLAG = 2;
 export const KITTY_KEYBOARD_SET_MODE_REPLACE = 1;
 export const KITTY_KEYBOARD_SET_MODE_OR = 2;
 export const KITTY_KEYBOARD_SET_MODE_AND_NOT = 3;
@@ -245,6 +284,7 @@ export const SEARCH_ACTIVE_MATCH_BORDER_HEX = "#ff8080";
 // active; otherwise it renders like the other toolbar icons.
 export const CAFFEINATE_ACCENT_COLOR = "#c8956c";
 
+export const KEYBOARD_SHORTCUTS_STORAGE_KEY = "localterm:keyboard-shortcuts";
 export const TERMINAL_THEME_STORAGE_KEY = "localterm:terminal-theme-id";
 export const TERMINAL_FONT_STORAGE_KEY = "localterm:terminal-font-id";
 export const TERMINAL_FONT_SIZE_STORAGE_KEY = "localterm:terminal-font-size";
@@ -280,6 +320,10 @@ export const DEFAULT_CWD_STORAGE_KEY = "localterm:default-cwd";
 // per-tab mirror of the CLI `--shell` flag). Empty = unset, so the server uses
 // its detected login shell (surfaced as the Settings field's placeholder).
 export const DEFAULT_SHELL_STORAGE_KEY = "localterm:default-shell";
+// Whether a touch-device (phone/tablet) bare connect resumes the user's most
+// recently active shell instead of spawning a fresh one. Default on; opt-out
+// from Settings → Launch restores the original spawn-fresh behavior.
+export const MOBILE_RESUME_STORAGE_KEY = "localterm:mobile-resume";
 // The per-browser-profile handle minted on first load and sent on the WS
 // upgrade as `?wid=`. `localStorage` is partitioned per browser profile, so
 // every tab/window of one profile shares this id and a different profile gets
@@ -297,6 +341,7 @@ export const CUSTOM_FONT_FAMILY_STORAGE_KEY = "localterm:custom-font-family";
 export const CUSTOM_THEMES_STORAGE_KEY = "localterm:custom-themes";
 export const NERD_FONT_ENABLED_STORAGE_KEY = "localterm:nerd-font-enabled";
 export const LIGATURES_ENABLED_STORAGE_KEY = "localterm:ligatures-enabled";
+export const MUTE_EMOJI_COLORS_STORAGE_KEY = "localterm:mute-emoji-colors";
 export const FONT_LOAD_PROBE_PX = 16;
 
 // Initial byte capacity of the OutputBatcher staging buffer. Picked above the
@@ -304,17 +349,32 @@ export const FONT_LOAD_PROBE_PX = 16;
 // need to grow on the first frame of an ASCII animation; subsequent bursts
 // double-capacity on demand until they fit into the reused backing store.
 export const OUTPUT_BATCHER_INITIAL_CAPACITY_BYTES = 8 * 1024;
+export const OUTPUT_PENDING_WRITE_COMPACTION_THRESHOLD_WRITES = 1024;
+export const SYNCHRONIZED_OUTPUT_END_SEQUENCE = "\x1b[?2026l";
+export const SYNCHRONIZED_OUTPUT_PREEMPTION_MINIMUM_COMPLETED_FRAMES = 2;
 
-// Raw in/out: the client flushes every output write synchronously on arrival
-// (one terminal.write per WebSocket message, in the WS message task — a
-// macrotask, not a requestAnimationFrame) and does not coalesce. The server
-// coalesces one logical TUI frame per message and caps a message at
-// OUTPUT_BATCH_FLUSH_BYTES (under xterm's 12ms parse-yield budget, so a single
-// write never spills to xterm's async drain — no partial paint), so the client
-// has nothing to coalesce: flushing on arrival gives each frame the earliest
-// possible render rAF (no latency window to shift a frame past a vsync
-// boundary and skip it — the visible jank on a 60fps TUI animation), keeps
-// xterm's parse out of a vsync so it can't starve the render rAF (the
+// A response immediately following PTY input can consume xterm's pending WebGL
+// render in the parser callback instead of waiting for its render rAF. Keep the
+// fast path to normal interactive redraw sizes so a key pressed during a
+// firehose cannot turn a 64KB throughput batch into synchronous render work.
+export const INTERACTIVE_OUTPUT_RENDER_MAX_BYTES = 8 * 1024;
+// Causal window between a successfully-sent PTY input and its response. Long
+// enough for a relayed connection, bounded so unrelated autonomous output does
+// not inherit a stale input's immediate-render treatment.
+export const INTERACTIVE_OUTPUT_RENDER_WINDOW_MS = 500;
+
+// Raw in/out: the client flushes every ordinary output write synchronously on
+// arrival (one terminal.write per WebSocket message, in the WS message task —
+// a macrotask, not a requestAnimationFrame). The server coalesces ordinary TUI
+// bursts and caps each message at OUTPUT_BATCH_FLUSH_BYTES (under xterm's 12ms
+// parse-yield budget, so a single write never spills to xterm's async drain).
+// Large DEC 2026 frames can span messages; the client preserves those message
+// boundaries and preserves one completed successor behind the current frame.
+// Multiple newer completions prove a real backlog rather than ordinary vsync
+// phase overlap; only then are their queued pieces handed to xterm as one ordered
+// parse transaction. This bounds stale latency without reintroducing the skipped
+// render opportunities seen when every one-frame overlap preempted its wait. It
+// also keeps normal parsing out of a vsync so it can't starve the render rAF (the
 // "smooth fps but visual stutter" same-deadline clash the old rAF coalescer had),
 // and lets xterm answer a terminal query in the same task before the probing
 // program's read times out (the response otherwise leaks into the shell as
@@ -348,6 +408,8 @@ export const WS_OUTPUT_GZIP = 0x01;
 export const WS_OUTPUT_BROTLI = 0x02;
 export const WS_OUTPUT_BROTLI_CTX = 0x03;
 export const WS_OUTPUT_CTX_HEADER_BYTES = 5;
+export const SYNTAX_TOKEN_CACHE_MAX_FILES = 32;
+export const AGENT_SKILL_CACHE_MAX_CWDS = 64;
 
 // How often the terminal polls the daemon's cached update check (the daemon
 // refreshes it once per UPDATE_CHECK_INTERVAL_MS on its own; this cadence just
@@ -356,3 +418,58 @@ export const WS_OUTPUT_CTX_HEADER_BYTES = 5;
 export const UPDATE_STATUS_POLL_INTERVAL_MS = 30 * 60 * 1000;
 // How long the update banner's copy button shows its “copied” feedback.
 export const UPDATE_COPY_FEEDBACK_MS = 1500;
+
+// On-screen keyboard (Unexpected-Keyboard-style in-app keyboard for touch).
+// The 100% baseline follows Apple iOS keyboard metrics in CSS px; the compact
+// default scales every visual metric together and users can resize it in the
+// keyboard settings panel without changing the terminal's column count.
+export const DEFAULT_KEYBOARD_HEIGHT_SCALE_PERCENT = 85;
+export const KEYBOARD_HEIGHT_SCALE_MIN_PERCENT = 70;
+export const KEYBOARD_HEIGHT_SCALE_MAX_PERCENT = 120;
+export const KEYBOARD_HEIGHT_SCALE_STEP_PERCENT = 5;
+export const KEYBOARD_HEIGHT_SCALE_BASE_PERCENT = 100;
+export const DEFAULT_KEYBOARD_HAPTICS_ENABLED = true;
+export const DEFAULT_KEYBOARD_KEY_PREVIEW_ENABLED = true;
+export const DEFAULT_KEYBOARD_KEY_REPEAT_ENABLED = true;
+export const KEYBOARD_HEIGHT_SCALE_STORAGE_KEY = "localterm:keyboard-height-scale";
+export const KEYBOARD_HAPTICS_STORAGE_KEY = "localterm:keyboard-haptics";
+export const KEYBOARD_KEY_PREVIEW_STORAGE_KEY = "localterm:keyboard-key-preview";
+export const KEYBOARD_KEY_REPEAT_STORAGE_KEY = "localterm:keyboard-key-repeat";
+export const KEYBOARD_KEY_HEIGHT_PX = 42;
+export const KEYBOARD_BOTTOM_KEY_HEIGHT_PX = 44;
+export const KEYBOARD_GAP_PX = 6;
+export const KEYBOARD_ROW_GAP_PX = 6;
+export const KEYBOARD_HORIZONTAL_PADDING_PX = 4;
+export const KEYBOARD_BOTTOM_PADDING_PX = 4;
+export const KEYBOARD_KEY_RADIUS_PX = 5;
+export const KEYBOARD_FONT_SIZE_PX = 22;
+export const KEYBOARD_TABLET_FONT_SIZE_ADDITION_PX = 2;
+export const KEYBOARD_ALTERNATE_FONT_SIZE_PX = 11;
+export const KEYBOARD_ALTERNATE_ICON_SIZE_PX = 14;
+export const KEYBOARD_SPECIAL_FONT_SIZE_PX = 15;
+export const KEYBOARD_ICON_SIZE_PX = 20;
+// Slide distance from the press point before a corner alternate is selected.
+// Below it the center char stays (filters jitter and grazing touches, the iOS
+// touch slop); past it a defined alternate wins only near its corner angle.
+export const KEYBOARD_SLIDE_THRESHOLD_PX = 18;
+export const KEYBOARD_SLIDE_DIRECTION_TOLERANCE_RAD = Math.PI / 6;
+// Press-and-hold auto-repeats the key (hardware key-repeat feel), so holding an
+// arrow corner moves the cursor continuously. Initial delay then a steady
+// interval, tuned for smooth arrow movement.
+export const KEYBOARD_KEY_REPEAT_INITIAL_DELAY_MS = 350;
+export const KEYBOARD_KEY_REPEAT_INTERVAL_MS = 60;
+// Press popup (the magnified key preview shown while a key is held). Width is
+// sized to fit the label so multi-char popups like "delete" or "caps lock"
+// don't clip; the char-width factor is a generous sans estimate for clamping.
+export const KEYBOARD_CALLOUT_FONT_SIZE_PX = 28;
+export const KEYBOARD_CALLOUT_CHAR_WIDTH_FACTOR = 0.6;
+export const KEYBOARD_CALLOUT_PADDING_PX = 24;
+export const KEYBOARD_CALLOUT_OFFSET_PX = 6;
+// Holding shift past this delay engages caps lock (stays on until tapped off);
+// a quick tap just toggles shift on/off.
+export const KEYBOARD_SHIFT_LONG_PRESS_MS = 400;
+// A touch-primary device with no fine pointer or hover is a phone or tablet;
+// anything else (desktop, laptop, touch-laptop, iPad+trackpad) is desktop-class
+// and never renders the on-screen keyboard. iPadOS 13+ ships a Mac UA, so UA
+// sniffing can't tell an iPad from a Mac — matchMedia reflects real capability.
+export const DEVICE_TABLET_MIN_WIDTH_PX = 768;
