@@ -3,17 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>TermDeck — your terminal and your notes, in one tab</title>
+    <title>TermDeck — the deck your agents work on</title>
     <meta
       name="description"
-      content="TermDeck fuses a browser-native terminal multiplexer with a Markdown knowledge workspace. A fork of localterm."
+      content="TermDeck is a browser-native workspace for people who run AI agents in terminals: a terminal multiplexer, a Markdown wiki, clickable file paths, an HTML preview you can annotate for your agent, and an infinite canvas — one tab, self-hosted, MIT-forked from localterm."
     />
+    <meta property="og:title" content="TermDeck — the deck your agents work on" />
+    <meta property="og:description" content="Terminal multiplexer + Markdown wiki + click-to-preview + element-level agent feedback + infinite canvas. One tab, self-hosted." />
+    <meta property="og:image" content="https://termdeck.huytieu.com/media/still-terminal.png" />
+    <meta property="og:url" content="https://termdeck.huytieu.com" />
+    <script>
+      // Theme before paint: saved choice, else OS preference.
+      (function () {
+        var t = localStorage.getItem("td-theme");
+        if (!t) t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.dataset.theme = t;
+      })();
+    </script>
     <style>
-      :root {
+      :root, :root[data-theme="dark"] {
         --bg: #1e1e1e;
         --panel: #282828;
-        --panel2: #222;
         --fg: #dadada;
+        --heading: #ffffff;
         --muted: #9b9b9b;
         --dim: #6b6b6b;
         --border: #3d3d3d;
@@ -21,19 +33,34 @@
         --coral-soft: rgba(225, 63, 94, 0.14);
         --green: #4ec9a0;
         --amber: #e5b567;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+        --nav-bg: rgba(30, 30, 30, 0.8);
+        --code-bg: #161616;
         --serif: "Charter", Georgia, Cambria, "Times New Roman", serif;
         --sans: "Public Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
         --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
       }
+      :root[data-theme="light"] {
+        --bg: #f8f8f8;
+        --panel: #ffffff;
+        --fg: #2b2b2b;
+        --heading: #111111;
+        --muted: #6d6d6d;
+        --dim: #9a9a9a;
+        --border: #e4e4e4;
+        --coral: #e13f5e;
+        --coral-soft: rgba(225, 63, 94, 0.1);
+        --green: #2f9e6e;
+        --amber: #b07d2e;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.12);
+        --nav-bg: rgba(248, 248, 248, 0.85);
+        --code-bg: #efefef;
+      }
       * { box-sizing: border-box; }
       html { scroll-behavior: smooth; }
       body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--fg);
-        font-family: var(--sans);
-        line-height: 1.6;
-        -webkit-font-smoothing: antialiased;
+        margin: 0; background: var(--bg); color: var(--fg);
+        font-family: var(--sans); line-height: 1.6; -webkit-font-smoothing: antialiased;
       }
       a { color: var(--coral); text-decoration: none; }
       a:hover { text-decoration: underline; }
@@ -42,22 +69,26 @@
         font-size: 11px; font-weight: 600; letter-spacing: 0.12em;
         text-transform: uppercase; color: var(--coral); margin: 0 0 14px;
       }
-      h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.02em; color: #fff; }
+      h1, h2, h3 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.02em; color: var(--heading); }
 
-      /* Nav */
       nav {
         position: sticky; top: 0; z-index: 20; backdrop-filter: blur(8px);
-        background: rgba(30, 30, 30, 0.8); border-bottom: 1px solid var(--border);
+        background: var(--nav-bg); border-bottom: 1px solid var(--border);
       }
       nav .wrap { display: flex; align-items: center; gap: 20px; height: 56px; }
-      .brand { font-family: var(--mono); font-weight: 700; letter-spacing: 0.06em; color: #fff; }
+      .brand { font-family: var(--mono); font-weight: 700; letter-spacing: 0.06em; color: var(--heading); }
       .brand b { color: var(--coral); }
       nav .spacer { flex: 1; }
       nav a { color: var(--muted); font-size: 14px; }
       nav a:hover { color: var(--fg); text-decoration: none; }
+      .theme-btn {
+        border: 1px solid var(--border); background: none; color: var(--muted);
+        border-radius: 8px; width: 32px; height: 32px; cursor: pointer; font-size: 15px; line-height: 1;
+      }
+      .theme-btn:hover { color: var(--fg); }
       .btn {
         display: inline-flex; align-items: center; gap: 7px; border-radius: 8px;
-        padding: 9px 16px; font-size: 14px; font-weight: 600; border: 1px solid transparent;
+        padding: 10px 18px; font-size: 14px; font-weight: 600; border: 1px solid transparent;
         transition: all 0.15s;
       }
       .btn-primary { background: var(--coral); color: #fff; }
@@ -65,99 +96,51 @@
       .btn-ghost { border-color: var(--border); color: var(--fg); }
       .btn-ghost:hover { border-color: var(--muted); text-decoration: none; }
 
-      /* Hero */
-      header.hero { padding: 92px 0 56px; text-align: center; }
-      header.hero h1 { font-size: 58px; line-height: 1.05; margin: 0 0 22px; }
+      header.hero { padding: 84px 0 40px; text-align: center; }
+      header.hero h1 { font-size: 56px; line-height: 1.05; margin: 0 0 22px; }
       header.hero h1 .c { color: var(--coral); }
-      header.hero p.lede {
-        font-size: 19px; color: var(--muted); max-width: 620px; margin: 0 auto 30px; line-height: 1.6;
-      }
+      header.hero p.lede { font-size: 19px; color: var(--muted); max-width: 660px; margin: 0 auto 30px; line-height: 1.6; }
       .cta-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-      .fork-note { margin-top: 26px; font-size: 13px; color: var(--dim); }
+      .fork-note { margin-top: 24px; font-size: 13px; color: var(--dim); }
 
-      /* App mock */
-      .mock {
-        margin: 40px auto 0; max-width: 940px; border: 1px solid var(--border);
-        border-radius: 12px; overflow: hidden; background: var(--bg);
-        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+      .shot {
+        display: block; width: 100%; border: 1px solid var(--border); border-radius: 12px;
+        box-shadow: var(--shadow); background: var(--panel);
       }
-      .mock .titlebar {
-        display: flex; align-items: center; gap: 7px; padding: 10px 14px;
-        background: var(--panel); border-bottom: 1px solid var(--border);
-      }
-      .mock .titlebar .dot { width: 11px; height: 11px; border-radius: 50%; background: #3d3d3d; }
-      .mock .titlebar .url {
-        margin-left: 10px; font-family: var(--mono); font-size: 11px; color: var(--dim);
-      }
-      .mock .body { display: grid; grid-template-columns: 48px 216px 1fr; min-height: 380px; }
-      .rail {
-        background: #1a1a1a; border-right: 1px solid var(--border); padding: 12px 0;
-        display: flex; flex-direction: column; align-items: center; gap: 14px;
-      }
-      .rail .logo { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--muted); }
-      .rail .ico { width: 20px; height: 20px; border-radius: 5px; }
-      .rail .ico.on { background: var(--coral-soft); box-shadow: inset 0 0 0 1px var(--coral); }
-      .rail .ico.off { background: #2a2a2a; }
-      .side { border-right: 1px solid var(--border); padding: 12px 0; font-family: var(--mono); }
-      .side .hd {
-        font-size: 10px; letter-spacing: 0.1em; color: var(--dim); padding: 0 14px 10px;
-        text-transform: uppercase;
-      }
-      .srow { display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12px; color: var(--fg); }
-      .srow .g { width: 8px; text-align: center; }
-      .srow small { color: var(--dim); }
-      .g-run { color: var(--amber); }
-      .g-need { color: var(--coral); }
-      .g-idle { color: var(--green); }
-      .main { padding: 34px 40px; overflow: hidden; }
-      .main .doc-h1 { font-family: var(--serif); font-size: 30px; color: #fff; margin: 0 0 8px; letter-spacing: -0.02em; }
-      .main .doc-h2 { font-family: var(--serif); font-size: 19px; color: #fff; margin: 22px 0 6px; }
-      .main p { font-family: var(--serif); font-size: 15px; color: var(--fg); margin: 10px 0; max-width: 60ch; }
-      .main ul { font-family: var(--serif); list-style: none; padding: 0; margin: 10px 0; }
-      .main li { position: relative; padding-left: 20px; font-size: 15px; margin: 5px 0; }
-      .main li::before { content: "→"; position: absolute; left: 0; color: var(--coral); font-weight: 600; }
-      .aside {
-        float: right; width: 150px; margin: 0 0 16px 28px; border-left: 1px solid var(--border);
-        padding-left: 18px; font-family: var(--sans);
-      }
-      .aside .lbl { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); margin: 0 0 8px; }
-      .aside .kv { display: flex; justify-content: space-between; font-size: 12px; margin: 3px 0; }
-      .aside .kv .v { color: var(--fg); }
-      .aside .kv .k { color: var(--muted); }
-      .aside .tag { display: inline-block; font-size: 11px; color: var(--coral); background: var(--coral-soft); border-radius: 5px; padding: 1px 6px; }
+      .hero-shot { margin: 44px auto 0; max-width: 960px; }
+      .caption { font-size: 12.5px; color: var(--dim); margin-top: 10px; font-family: var(--mono); }
 
-      /* Sections */
-      section { padding: 72px 0; border-top: 1px solid var(--border); }
+      section { padding: 76px 0; border-top: 1px solid var(--border); }
       section h2 { font-size: 34px; margin: 0 0 10px; }
-      section .sub { color: var(--muted); font-size: 16px; max-width: 640px; margin: 0 0 40px; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
-      .card {
-        border: 1px solid var(--border); border-radius: 12px; padding: 22px 22px 24px; background: var(--panel2);
+      section .sub { color: var(--muted); font-size: 16.5px; max-width: 680px; margin: 0 0 36px; }
+      .pill {
+        display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 9px;
+        border: 1px solid var(--border); border-radius: 999px; color: var(--muted); margin-left: 10px;
+        vertical-align: middle;
       }
-      .card .k { font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--coral); margin: 0 0 10px; }
-      .card h3 { font-size: 19px; margin: 0 0 8px; }
-      .card p { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.6; }
-      .legend { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 8px; font-family: var(--mono); font-size: 13px; }
-      .legend span b { font-weight: 400; }
+      .points { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px 28px; margin: 28px 0 0; padding: 0; list-style: none; }
+      .points li { padding-left: 22px; position: relative; font-size: 15px; color: var(--fg); }
+      .points li::before { content: "→"; position: absolute; left: 0; color: var(--coral); }
+      .points li b { color: var(--heading); }
+      .points li code, p code, .sub code {
+        font-family: var(--mono); font-size: 0.86em; background: var(--code-bg);
+        border-radius: 5px; padding: 1.5px 6px;
+      }
 
-      /* Quickstart */
-      pre {
-        background: #151515; border: 1px solid var(--border); border-radius: 10px;
-        padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13px;
-        line-height: 1.7; color: var(--fg); margin: 0;
+      .quick pre {
+        background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+        padding: 18px 20px; overflow-x: auto; font-family: var(--mono); font-size: 13.5px; line-height: 1.7;
       }
-      pre .c { color: var(--dim); }
-      pre .p { color: var(--coral); }
+      .quick pre .c { color: var(--dim); }
+      .quick pre .g { color: var(--green); }
 
       footer { padding: 48px 0 64px; border-top: 1px solid var(--border); color: var(--dim); font-size: 13px; }
       footer a { color: var(--muted); }
       footer .credits { margin-top: 10px; line-height: 1.8; }
 
-      @media (max-width: 760px) {
-        header.hero h1 { font-size: 40px; }
-        .mock .body { grid-template-columns: 40px 150px 1fr; }
-        .aside { display: none; }
-        .main { padding: 24px; }
+      @media (max-width: 720px) {
+        header.hero h1 { font-size: 38px; }
+        section h2 { font-size: 27px; }
       }
     </style>
   </head>
@@ -166,160 +149,186 @@
       <div class="wrap">
         <span class="brand">Term<b>Deck</b></span>
         <span class="spacer"></span>
-        <a href="#features">Features</a>
-        <a href="#start">Quickstart</a>
+        <a href="#terminal">Terminal</a>
+        <a href="#preview">Preview</a>
+        <a href="#tweak">Tweak</a>
+        <a href="#wiki">Wiki</a>
+        <a href="#canvas">Canvas</a>
+        <a href="#start">Install</a>
         <a href="https://github.com/huytieu/termdeck-localterm">GitHub</a>
+        <button class="theme-btn" id="themeToggle" aria-label="Toggle theme">◐</button>
       </div>
     </nav>
 
     <header class="hero">
       <div class="wrap">
-        <p class="eyebrow">Terminal · Knowledge workspace</p>
-        <h1>Your terminal and your notes,<br />in <span class="c">one browser tab</span>.</h1>
+        <p class="eyebrow">Self-hosted · MIT fork of localterm · One tab</p>
+        <h1>The deck your <span class="c">agents</span> work on.</h1>
         <p class="lede">
-          Run shells and agents where every tab is a session. Read and write the Markdown they touch
-          right beside them — a proper reading surface and a Notion-style editor. Reachable from any
-          device on your tailnet.
+          You run coding agents in terminals all day. TermDeck puts those terminals in the browser
+          and wires everything around them: file paths you can click, docs that render, HTML you can
+          annotate and send back to the agent, and a canvas for thinking. Your machine, your files, one tab.
         </p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="#start">Get started →</a>
-          <a class="btn btn-ghost" href="https://github.com/huytieu/termdeck-localterm">View on GitHub</a>
+          <a class="btn btn-primary" href="#start">Run it in a minute</a>
+          <a class="btn btn-ghost" href="https://github.com/huytieu/termdeck-localterm">Star on GitHub</a>
         </div>
-        <p class="fork-note">A fork of <a href="https://github.com/monotykamary/localterm">localterm</a> (MIT) · MIT licensed</p>
-
-        <!-- Recreated UI (no real data) -->
-        <div class="mock" aria-hidden="true">
-          <div class="titlebar">
-            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            <span class="url">localterm.localhost — wiki</span>
-          </div>
-          <div class="body">
-            <div class="rail">
-              <span class="logo">TD</span>
-              <span class="ico off"></span>
-              <span class="ico on"></span>
-            </div>
-            <div class="side">
-              <div class="hd">Terminals</div>
-              <div class="srow"><span class="g g-run">●</span> dev server</div>
-              <div class="srow"><span class="g g-need">●</span> agent · refactor auth</div>
-              <div class="srow"><span class="g g-idle">○</span> notes build</div>
-              <div class="hd" style="margin-top:16px">Explorer</div>
-              <div class="srow">📁 projects</div>
-              <div class="srow">📄 roadmap.md</div>
-              <div class="srow">📄 welcome.md</div>
-            </div>
-            <div class="main">
-              <div class="aside">
-                <div class="lbl">Properties</div>
-                <div class="kv"><span class="k">Created</span><span class="v">Jul 14</span></div>
-                <div class="kv"><span class="k">Tags</span><span class="tag">roadmap</span></div>
-                <div class="lbl" style="margin-top:16px">Stats</div>
-                <div class="kv"><span class="k">Words</span><span class="v">312</span></div>
-                <div class="kv"><span class="k">Reading</span><span class="v">2m</span></div>
-              </div>
-              <div class="doc-h1">Q3 Roadmap</div>
-              <p>A reading surface, not a file dump — serif type, a calm measure, and the metadata tucked into a side panel.</p>
-              <div class="doc-h2">Themes</div>
-              <ul>
-                <li>Ship the editor round-trip</li>
-                <li>Session status at a glance</li>
-                <li>Usage quota in the header</li>
-              </ul>
-            </div>
-          </div>
-        </div>
+        <p class="fork-note">
+          Built on <a href="https://github.com/monotykamary/localterm">localterm</a> by @monotykamary ·
+          wiki inspired by <a href="https://github.com/anh-chu/wiki-viewer">anh-chu/wiki-viewer</a>
+        </p>
+        <img class="shot hero-shot" src="media/demo.gif" alt="TermDeck: terminal, wiki, and grid in one browser tab" />
       </div>
     </header>
 
-    <section id="features">
+    <section id="terminal">
       <div class="wrap">
-        <p class="eyebrow">The terminal</p>
-        <h2>Every tab is a shell.</h2>
+        <p class="eyebrow">Terminal</p>
+        <h2>Every tab is a shell. Every shell survives the tab.</h2>
         <p class="sub">
-          The full localterm session model — open a tab to spawn a shell, close it and it waits in the
-          switcher, never reaped mid-command. TermDeck adds the signals you need to run a fleet of agents.
+          A real terminal multiplexer in the browser: sessions keep running when you close the tab,
+          reattach from any device on your tailnet — the phone included. The grid shows every session
+          live, so a wall of agents is one glance.
         </p>
-        <div class="grid">
-          <div class="card">
-            <p class="k">Status at a glance</p>
-            <h3>Know who needs you</h3>
-            <p>A minimal colored glyph per session, so a screen full of agents tells you where to look.</p>
-            <div class="legend">
-              <span class="g-run">● <b>running</b></span>
-              <span class="g-need">● <b>needs you</b></span>
-              <span class="g-idle">○ <b>idle · done</b></span>
-            </div>
-          </div>
-          <div class="card">
-            <p class="k">Hover to kill</p>
-            <h3>Stop a session in place</h3>
-            <p>A small ✕ appears on each row — end a run from the list without opening the grid.</p>
-          </div>
-          <div class="card">
-            <p class="k">Usage quota</p>
-            <h3>Limits in the header</h3>
-            <p>Session and weekly bars with % remaining and reset countdown, right where you work.</p>
-            <div class="legend"><span class="g-idle">s:▰▰▱▱▱ 52% ↻2h</span> <span class="g-idle">w:▰▰▰▰▱ 94% ↻6d</span></div>
-          </div>
-        </div>
+        <img class="shot" src="media/still-terminal.png" alt="TermDeck terminal with session sidebar" />
+        <ul class="points">
+          <li><b>Detach / reattach</b> — close the laptop, pick the session up on your phone.</li>
+          <li><b>Status glyphs</b> — running, needs-you, idle: triage the deck without reading a line.</li>
+          <li><b>Live grid</b> — every session as an interactive tile, not a static preview.</li>
+          <li><b>Claude usage quota</b> — session + weekly budget bars right in the grid header.</li>
+          <li><b>Automations & webhooks</b> — schedule commands, trigger on git events.</li>
+          <li><b>Worktrees, secrets, pinned REST sessions</b> — inherited from a great upstream.</li>
+        </ul>
       </div>
     </section>
 
-    <section>
+    <section id="preview">
       <div class="wrap">
-        <p class="eyebrow">The wiki</p>
-        <h2>A home for your Markdown.</h2>
+        <p class="eyebrow">Click-to-preview</p>
+        <h2>Every file path in output is a link.</h2>
         <p class="sub">
-          The notes your shells live next to, made legible. Browse the vault, read it like a document, and
-          edit it like Notion — without leaving the tab.
+          Your agent prints <code>report.md</code>, <code>dashboard.html</code>, <code>src/search.ts:42</code> —
+          in TermDeck those are links. Click one and it opens rendered in a drawer beside the terminal:
+          Markdown with typography, code with syntax highlighting jumped to the line, CSV as tables,
+          images, PDFs, HTML as the actual page. The terminal never moves.
         </p>
-        <div class="grid">
-          <div class="card">
-            <p class="k">Read</p>
-            <h3>A calm reading surface</h3>
-            <p>Serif type, a centered measure, coral accents, and a Properties / Location / Stats panel with live word count and reading time. Reading mode hides all the chrome.</p>
-          </div>
-          <div class="card">
-            <p class="k">Write</p>
-            <h3>WYSIWYG that keeps your Markdown</h3>
-            <p>Headings, lists, tasks, tables, code — edited as rich blocks with a faithful round-trip. Frontmatter and <code style="color:var(--coral)">[[wikilinks]]</code> stay intact. Flip to raw source anytime.</p>
-          </div>
-          <div class="card">
-            <p class="k">Organize</p>
-            <h3>A file tree that remembers</h3>
-            <p>Persistent expand/collapse, extension filters, full-text search, one-click new note (defaults to <code style="color:var(--coral)">.md</code>), inline color swatches, and syntax-highlighted code.</p>
-          </div>
-        </div>
+        <img class="shot" src="media/flow-path-click.gif" alt="Clicking a file path in terminal output opens a rendered drawer" />
+        <p class="caption">agent prints paths → click → rendered markdown → click code path → line 42, highlighted</p>
+        <ul class="points">
+          <li><b>Works for any program</b> — it's the terminal linkifying, not the agent: git, pytest, ls, anything.</li>
+          <li><b>Line jumps</b> — <code>file.ts:42</code> opens the source scrolled and highlighted at 42.</li>
+          <li><b>Drawer, not navigation</b> — layover or split; the session stays mounted underneath.</li>
+          <li><b>GitHub links too</b> — issue/PR URLs render as fetched markdown in the same drawer.</li>
+        </ul>
       </div>
     </section>
 
-    <section id="start">
+    <section id="tweak">
       <div class="wrap">
-        <p class="eyebrow">Quickstart</p>
+        <p class="eyebrow">Tweak mode</p>
+        <h2>Point at the pixel. The agent gets the selector.</h2>
+        <p class="sub">
+          The drawer renders HTML — a vault file or your deployed app through a same-origin proxy.
+          Toggle <b>Tweak</b> and the page becomes an element picker: click the thing that's wrong,
+          type what should change, and TermDeck sends the agent a structured message — robust CSS
+          selector, element snippet, your note — straight into its terminal session.
+        </p>
+        <img class="shot" src="media/flow-tweak.gif" alt="Tweak mode: pick an element, write a note, batch and send to the agent" />
+        <p class="caption">render dashboard.html → tweak mode → pick element → note → batch → “Send 2 tweaks”</p>
+        <ul class="points">
+          <li><b>Send now or batch</b> — stack up tweaks in a tray, send them as one message.</li>
+          <li><b>Linked session routing</b> — feedback lands in the session that produced the file, or spawns a fresh one.</li>
+          <li><b>Remote deploys too</b> — a clicked deploy link previews framed in the drawer, picker injected.</li>
+          <li><b>Text selections</b> — highlight prose in any rendered doc and “chat about this” the same way.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="wiki">
+      <div class="wrap">
+        <p class="eyebrow">Wiki</p>
+        <h2>A reading room for your Markdown.</h2>
+        <p class="sub">
+          The same daemon serves your notes as a wiki: serif reading surface, frontmatter panel,
+          reading stats, full-text search, filters, and Obsidian <code>[[wikilinks]]</code> that
+          resolve. Editing is WYSIWYG with slash commands — frontmatter preserved verbatim,
+          markdown round-trips losslessly.
+        </p>
+        <img class="shot" src="media/still-reading.png" alt="TermDeck wiki reading view" />
+        <ul class="points">
+          <li><b>Renders 25+ file types</b> — md, code, CSV, images, PDF, video, HTML, diffs.</li>
+          <li><b>Mermaid everywhere</b> — <code>```mermaid</code> fences render as live diagrams in every surface.</li>
+          <li><b>WYSIWYG + slash menu</b> — Notion-style blocks over plain files; source mode one toggle away.</li>
+          <li><b>Reading mode</b> — chrome melts away; Esc brings it back.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="canvas">
+      <div class="wrap">
+        <p class="eyebrow">Canvas <span class="pill">new</span></p>
+        <h2>An infinite whiteboard, offline, in the same tab.</h2>
+        <p class="sub">
+          The third mode is a <a href="https://tldraw.dev">tldraw</a> canvas — fully offline
+          (assets bundled, document in IndexedDB, no accounts, nothing leaves your machine).
+          And it understands what you paste: mermaid source becomes a live diagram, a Markdown doc
+          becomes a rendered card — tables, code, and embedded charts included.
+        </p>
+        <img class="shot" src="media/flow-canvas.gif" alt="Pasting markdown onto the canvas renders it as a card with inline mermaid" />
+        <p class="caption">paste a markdown doc → rendered card with table + live mermaid flow</p>
+        <img class="shot" style="margin-top: 18px" src="media/still-canvas-mermaid.png" alt="Pasted mermaid source rendered as a live diagram shape" />
+        <p class="caption">paste bare mermaid → a diagram shape; double-click to edit the source in place</p>
+        <ul class="points">
+          <li><b>Paste-aware</b> — mermaid → diagram, markdown → card, plain text stays plain.</li>
+          <li><b>Double-click to edit</b> — the source reopens in place; the render updates on commit.</li>
+          <li><b>Theme-synced</b> — follows the same light/dark toggle as the terminal and wiki.</li>
+          <li><b>Local-first</b> — survives reloads via IndexedDB; zero network requests.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="start" class="quick">
+      <div class="wrap">
+        <p class="eyebrow">Install</p>
         <h2>Running in a minute.</h2>
-        <p class="sub">Clone, build, and start the daemon. Loopback needs zero setup; a tailnet gives you every device.</p>
-        <pre><span class="c"># clone &amp; build</span>
+        <p class="sub">Node 24+, pnpm. Clone, build, start — then open the printed URL anywhere on your tailnet.</p>
+        <pre><span class="c"># clone the deck</span>
 git clone https://github.com/huytieu/termdeck-localterm
-<span class="p">cd</span> termdeck-localterm
-pnpm install
-pnpm build
+cd termdeck-localterm
 
-<span class="c"># boot the daemon, then open the URL it prints</span>
+<span class="c"># build everything (server + frontend)</span>
+pnpm install &amp;&amp; pnpm build
+
+<span class="c"># start the daemon</span>
 pnpm start
-pnpm cli status   <span class="c"># → http://localterm.localhost:3417</span></pre>
+<span class="g">✓ termdeck up on http://localhost:3417</span></pre>
+        <ul class="points">
+          <li><b>Self-hosted</b> — one daemon, serves the UI, owns the PTYs. No cloud, no account.</li>
+          <li><b>Tailnet-ready</b> — serve over Tailscale and the whole deck works from your phone.</li>
+          <li><b>MIT</b> — fork it, bend it. Upstream-sync documented.</li>
+        </ul>
       </div>
     </section>
 
     <footer>
       <div class="wrap">
-        <span class="brand">Term<b>Deck</b></span> — your terminal and your notes, in one tab.
+        <span class="brand">Term<b>Deck</b></span> — the deck your agents work on.
         <div class="credits">
-          A fork of <a href="https://github.com/monotykamary/localterm">localterm</a> by @monotykamary (MIT) — the terminal foundation is its work.<br />
-          The Markdown wiki workspace is inspired by <a href="https://github.com/anh-chu/wiki-viewer">anh-chu/wiki-viewer</a>.<br />
-          MIT licensed · additions © the TermDeck contributors.
+          MIT. A fork of <a href="https://github.com/monotykamary/localterm">monotykamary/localterm</a> —
+          the terminal foundation is theirs and it's excellent.
+          Wiki concept inspired by <a href="https://github.com/anh-chu/wiki-viewer">anh-chu/wiki-viewer</a>.
+          Canvas by <a href="https://tldraw.dev">tldraw</a> (SDK license applies for production use).
+          Built by <a href="https://huytieu.com">Huy Tieu</a>.
         </div>
       </div>
     </footer>
+
+    <script>
+      document.getElementById("themeToggle").addEventListener("click", function () {
+        var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        localStorage.setItem("td-theme", next);
+      });
+    </script>
   </body>
 </html>
