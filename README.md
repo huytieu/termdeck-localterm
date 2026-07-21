@@ -5,6 +5,10 @@
 **Product page: [termdeck.huytieu.com](https://termdeck.huytieu.com)**
 
 <p align="center">
+  <img src="docs/media/banner.svg" alt="TermDeck — the deck your agents work on" width="860">
+</p>
+
+<p align="center">
   <img src="docs/media/demo.gif" alt="TermDeck — a terminal multiplexer and a Markdown wiki in one browser tab" width="860">
 </p>
 
