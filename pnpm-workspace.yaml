@@ -1,3 +1,5 @@
+dedupePeerDependents: false
+
 packages:
   - "apps/*"
   - "apps/harness/*"

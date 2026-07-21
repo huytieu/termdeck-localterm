@@ -20,6 +20,9 @@ import { ArtifactDrawer, type ArtifactMode } from "@/components/artifact-drawer"
 const WikiDetail = lazy(() =>
   import("@/components/wiki-detail").then((m) => ({ default: m.WikiDetail })),
 );
+// tldraw is a ~2MB chunk (editor + its own CSS); the canvas mode is the only
+// consumer, so it loads on first switch, never on the terminal landing path.
+const Canvas = lazy(() => import("@/components/canvas").then((m) => ({ default: m.Canvas })));
 import { Grid } from "@/components/grid";
 import { Terminal } from "@/components/terminal";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -171,6 +174,10 @@ export const Shell = () => {
         const detail =
           mode === "settings" ? (
             <SettingsPanel />
+          ) : mode === "canvas" ? (
+            <Suspense fallback={<div className="h-full bg-background" />}>
+              <Canvas />
+            </Suspense>
           ) : mode === "term" ? (
             sid ? (
               <Terminal key={sid} />

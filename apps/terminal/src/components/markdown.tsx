@@ -6,6 +6,7 @@ import { openWikiFile } from "@/hooks/use-shell";
 import { currentTheme, subscribeTheme } from "@/lib/theme";
 import { detectLangId, tokenizeDiffLines, type SyntaxLine } from "@/utils/syntax-highlight";
 import { isLikelyRelativePath } from "@/utils/is-likely-relative-path";
+import { MermaidDiagram } from "@/components/mermaid-diagram";
 
 // Fenced code block highlighted with the same shiki pipeline (github-light /
 // dark-plus) the source viewer uses. Only rendered in the file view (sourcePath
@@ -204,11 +205,21 @@ function makeComponents(
       </blockquote>
     ),
     hr: () => <hr className="my-6 border-0 border-t border-border" />,
-    pre: ({ children }) => (
-      <pre className="my-3 overflow-x-auto rounded-lg bg-[var(--code-bg)] p-3.5 font-mono text-[0.85em] leading-relaxed text-foreground">
-        {children}
-      </pre>
-    ),
+    pre: ({ children }) => {
+      // A mermaid fence renders as a diagram (see `code` below) that draws its
+      // own frame — wrapping it in the code-block chrome would double-box it.
+      const only = Array.isArray(children) ? children[0] : children;
+      const childClass = (only as React.ReactElement<{ className?: string }> | null)?.props
+        ?.className;
+      if (typeof childClass === "string" && childClass.includes("language-mermaid")) {
+        return <>{children}</>;
+      }
+      return (
+        <pre className="my-3 overflow-x-auto rounded-lg bg-[var(--code-bg)] p-3.5 font-mono text-[0.85em] leading-relaxed text-foreground">
+          {children}
+        </pre>
+      );
+    },
     img: ({ src, alt }) => (
       // eslint-disable-next-line jsx-a11y/alt-text -- alt comes through as a prop, may be undefined for decorative images
       <img src={src} alt={alt} className="my-3 w-full rounded-lg border border-border" />
@@ -219,10 +230,15 @@ function makeComponents(
       // fenced block is detected by its language-* class or a newline in the body.
       const isFenced = /language-[\w-]+/.test(className || "") || text.includes("\n");
       if (isFenced) {
+        const lang = /language-([\w-]+)/.exec(className || "")?.[1] ?? null;
+        // Mermaid fences render as live diagrams in every markdown surface
+        // (wiki, file preview, agent log, canvas card), not as code.
+        if (lang === "mermaid") {
+          return <MermaidDiagram code={text.replace(/\n$/, "")} />;
+        }
         // In the file view (sourcePath), highlight with shiki; in the streaming
         // log keep it plain so the <pre> styles it lightly.
         if (sourcePath) {
-          const lang = /language-([\w-]+)/.exec(className || "")?.[1] ?? null;
           return <ShikiCode code={text} lang={lang} className={className} />;
         }
         return (

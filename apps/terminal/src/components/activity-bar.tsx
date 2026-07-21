@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { BookText, Moon, Settings, SquareTerminal, Sun } from "lucide-react";
+import { BookText, Moon, Settings, Shapes, SquareTerminal, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { switchMode, type ShellMode } from "@/hooks/use-shell";
 import { currentTheme, subscribeTheme, toggleTheme } from "@/lib/theme";
@@ -46,6 +46,12 @@ export const ActivityBar = ({ mode }: { mode: ShellMode }) => (
       label="Wiki"
       icon={<BookText className="size-5" />}
       onClick={() => switchMode("wiki")}
+    />
+    <Item
+      active={mode === "canvas"}
+      label="Canvas"
+      icon={<Shapes className="size-5" />}
+      onClick={() => switchMode("canvas")}
     />
     {/* Theme toggle + Settings pinned to the bottom, VS Code style. */}
     <div className="mt-auto w-full">
