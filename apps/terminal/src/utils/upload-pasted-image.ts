@@ -18,6 +18,13 @@ export const uploadPastedImage = async (
   form.append("image", blob, filename ?? "image");
   const response = await fetch(url.toString(), { method: "POST", body: form });
   if (!response.ok) {
+    // A 404 here almost always means the running daemon predates this UI build
+    // (the dist is served from disk per request, so the frontend updates on a
+    // rebuild while the daemon keeps its startup routes). Name the real fix
+    // instead of a bare status code.
+    if (response.status === 404) {
+      throw new Error("Daemon is older than this UI — restart localterm to enable image paste");
+    }
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `upload failed (${response.status})`);
   }
