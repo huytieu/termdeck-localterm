@@ -1,6 +1,8 @@
 # TermDeck
 
-**Your terminal and your notes, in one browser tab.**
+**The deck your agents work on.**
+
+**Product page: [termdeck.huytieu.com](https://termdeck.huytieu.com)**
 
 <p align="center">
   <img src="docs/media/demo.gif" alt="TermDeck — a terminal multiplexer and a Markdown wiki in one browser tab" width="860">
@@ -32,7 +34,26 @@ TermDeck is a browser-native workspace that fuses two things: a terminal multipl
 - **A reading surface, not a file dump.** Serif reading typography, a centered measure, a coral accent, and a right-hand info panel (Properties / Location / Stats — word count, blocks, reading time computed live). Toggle **reading mode** to hide all chrome.
 - **WYSIWYG editor**, Notion/Obsidian style — headings, lists, tasks, tables, code, links — with a faithful Markdown round-trip (frontmatter preserved verbatim, `[[wikilinks]]` intact). Type **`/`** for a block-insert menu (headings, lists, quote, code block, table, divider) with keyboard nav, or use inline Markdown shortcuts. Flip to raw Markdown source anytime.
 - **New note** in a click (defaults to `.md`), `[[wikilinks]]`, inline color swatches for hex/rgb values, and syntax-highlighted code (light/dark).
+- **Mermaid everywhere.** ` ```mermaid ` fences render as live, theme-aware diagrams in every markdown surface — wiki, file previews, agent logs, canvas cards.
 - Light and dark themes across the whole app, with one shared toggle.
+
+### Click-to-preview — every file path in output is a link _(TermDeck)_
+
+- Your agent prints `report.md`, `dashboard.html`, `src/search.ts:42` — click any of them and the file opens **rendered** in a drawer beside the terminal: Markdown with typography, code syntax-highlighted and jumped to the line, CSV as tables, images, PDFs, HTML as the actual page. The terminal stays mounted.
+- Works for **any program's output** (git, pytest, ls) — it's the terminal linkifying, not the agent.
+- GitHub issue/PR links render as fetched markdown in the same drawer; remote deploy links preview framed through a same-origin proxy.
+
+### Tweak mode — point at the pixel, the agent gets the selector _(TermDeck)_
+
+- Toggle **Tweak** on any rendered HTML (vault file or proxied deploy) and the page becomes an element picker: click the element, type what should change.
+- **Send now** dispatches one structured tweak (robust CSS selector + element snippet + your note) straight into the linked terminal session; **Add to batch** stacks several and sends them as one message.
+- Text selections in any rendered doc get the same treatment ("chat about this").
+
+### Canvas — an infinite whiteboard, offline _(TermDeck)_
+
+- A third mode built on the [tldraw](https://tldraw.dev) SDK: fully offline (assets bundled, document in IndexedDB), theme-synced with the rest of the app.
+- **Paste-aware:** mermaid source becomes a live diagram shape; a Markdown doc becomes a rendered card — tables, code, and embedded ` ```mermaid ` charts included. Double-click any shape to edit its source in place.
+- tldraw's SDK license applies for production use; a free hobby license covers personal setups (`localStorage.setItem("termdeck:tldrawLicense", "<key>")`).
 
 ---
 
@@ -59,7 +80,7 @@ The mental model is **shell = browser tab**; switch to Wiki mode from the left r
 | --- | --- | --- |
 | ![Reading view](docs/media/still-reading.png) | ![Slash menu](docs/media/still-slash.png) | ![Terminal grid](docs/media/still-terminal.png) |
 
-A landing page with the full walkthrough lives in [`landing/index.html`](landing/index.html) — open it in any browser. It's self-contained (no build step, no external requests).
+The full product page with per-feature demo GIFs is live at **[termdeck.huytieu.com](https://termdeck.huytieu.com)** (source: [`landing/`](landing/)).
 
 ---
 
@@ -70,7 +91,9 @@ TermDeck stands on other people's work and says so:
 - **[localterm](https://github.com/monotykamary/localterm)** by [@monotykamary](https://github.com/monotykamary) — the entire terminal foundation (session model, daemon, tailnet serve, grid). TermDeck is a fork of it.
 - **[anh-chu/wiki-viewer](https://github.com/anh-chu/wiki-viewer)** — the inspiration for the in-app Markdown wiki workspace.
 
-TermDeck's own additions: the memo-style reading view, the WYSIWYG editor (with the `/` block-insert menu), the file-tree filters + persistence + new-file flow, session status glyphs (sidebar **and** grid tiles), hover-kill, and the usage-quota header.
+- **[tldraw](https://tldraw.dev)** — the canvas SDK behind Canvas mode (its SDK license applies for production use).
+
+TermDeck's own additions: the memo-style reading view, the WYSIWYG editor (with the `/` block-insert menu), the file-tree filters + persistence + new-file flow, session status glyphs (sidebar **and** grid tiles), hover-kill, the usage-quota header, clickable file paths → artifact drawer, tweak mode with batched element feedback, and the paste-aware offline canvas.
 
 ## License
 
