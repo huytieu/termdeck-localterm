@@ -19,6 +19,7 @@ import {
   storeLigaturesEnabled,
 } from "@/utils/stored-ligatures-enabled";
 import { loadStoredMuteEmojiColors, storeMuteEmojiColors } from "@/utils/stored-mute-emoji-colors";
+import { loadStoredWebglEnabled, storeWebglEnabled } from "@/utils/stored-webgl-enabled";
 import { loadStoredNerdFontEnabled, storeNerdFontEnabled } from "@/utils/stored-nerd-font-enabled";
 import { loadStoredTerminalFontId, storeTerminalFontId } from "@/utils/stored-terminal-font-id";
 import {
@@ -37,6 +38,7 @@ export const useTerminalFontSettings = () => {
   const initialNerdFontEnabledRef = useRef<boolean>(loadStoredNerdFontEnabled());
   const initialLigaturesEnabledRef = useRef<boolean>(loadStoredLigaturesEnabled());
   const initialMuteEmojiColorsRef = useRef<boolean>(loadStoredMuteEmojiColors());
+  const initialWebglEnabledRef = useRef<boolean>(loadStoredWebglEnabled());
   const initialCustomFontFamilyRef = useRef<string>(loadStoredCustomFontFamily());
   const [activeFontId, setActiveFontId] = useState<string>(initialFontIdRef.current);
   const [previewFontId, setPreviewFontId] = useState<string | null>(null);
@@ -49,6 +51,9 @@ export const useTerminalFontSettings = () => {
   );
   const [activeMuteEmojiColors, setActiveMuteEmojiColors] = useState<boolean>(
     initialMuteEmojiColorsRef.current,
+  );
+  const [activeWebglEnabled, setActiveWebglEnabled] = useState<boolean>(
+    initialWebglEnabledRef.current,
   );
   const [activeFontSize, setActiveFontSize] = useState<number>(initialFontSizeRef.current);
   const [activeLineHeight, setActiveLineHeight] = useState<number>(initialLineHeightRef.current);
@@ -157,6 +162,11 @@ export const useTerminalFontSettings = () => {
     storeMuteEmojiColors(nextMuted);
   }, []);
 
+  const handleWebglEnabledChange = useCallback((nextEnabled: boolean) => {
+    setActiveWebglEnabled(nextEnabled);
+    storeWebglEnabled(nextEnabled);
+  }, []);
+
   const handleFontSizeChange = useCallback((nextFontSize: number) => {
     const clamped = clampTerminalFontSize(nextFontSize);
     setActiveFontSize(clamped);
@@ -184,12 +194,14 @@ export const useTerminalFontSettings = () => {
     initialCustomFontFamilyRef,
     initialNerdFontEnabledRef,
     initialMuteEmojiColorsRef,
+    initialWebglEnabledRef,
     initialFontSizeRef,
     initialLineHeightRef,
     activeFontId,
     activeNerdFontEnabled,
     activeLigaturesEnabled,
     activeMuteEmojiColors,
+    activeWebglEnabled,
     activeFontSize,
     activeLineHeight,
     activeCustomFontFamily,
@@ -199,6 +211,7 @@ export const useTerminalFontSettings = () => {
     setActiveNerdFontEnabled,
     setActiveLigaturesEnabled,
     setActiveMuteEmojiColors,
+    setActiveWebglEnabled,
     setActiveFontSize,
     setActiveLineHeight,
     setActiveCustomFontFamily,
@@ -207,6 +220,7 @@ export const useTerminalFontSettings = () => {
     handleNerdFontEnabledChange,
     handleLigaturesEnabledChange,
     handleMuteEmojiColorsChange,
+    handleWebglEnabledChange,
     handleFontSizeChange,
     handleLineHeightChange,
     handleCustomFontFamilyChange,

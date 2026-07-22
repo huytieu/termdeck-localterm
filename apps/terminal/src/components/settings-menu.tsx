@@ -48,6 +48,8 @@ interface SettingsMenuProps {
   onLigaturesEnabledChange: (enabled: boolean) => void;
   muteEmojiColors: boolean;
   onMuteEmojiColorsChange: (muted: boolean) => void;
+  webglEnabled: boolean;
+  onWebglEnabledChange: (enabled: boolean) => void;
   fontSize: number;
   onFontSizeChange: (size: number) => void;
   lineHeight: number;
@@ -115,6 +117,8 @@ export const SettingsMenu = ({
   onLigaturesEnabledChange,
   muteEmojiColors,
   onMuteEmojiColorsChange,
+  webglEnabled,
+  onWebglEnabledChange,
   fontSize,
   onFontSizeChange,
   lineHeight,
@@ -270,6 +274,8 @@ export const SettingsMenu = ({
                       onLigaturesEnabledChange={onLigaturesEnabledChange}
                       muteEmojiColors={muteEmojiColors}
                       onMuteEmojiColorsChange={onMuteEmojiColorsChange}
+                      webglEnabled={webglEnabled}
+                      onWebglEnabledChange={onWebglEnabledChange}
                       fontSize={fontSize}
                       onFontSizeChange={onFontSizeChange}
                       lineHeight={lineHeight}

@@ -34,6 +34,8 @@ interface SettingsMenuHarnessProps {
   initialFontId?: string;
   initialLigaturesEnabled?: boolean;
   initialMuteEmojiColors?: boolean;
+  initialWebglEnabled?: boolean;
+  onWebglEnabledChange?: (enabled: boolean) => void;
   initialDefaultCwd?: string;
   onThemeChange?: (id: string) => void;
   onThemePreview?: (id: string | null) => void;
@@ -91,6 +93,8 @@ const renderSettingsMenu = ({
   initialFontId = "geist-mono",
   initialLigaturesEnabled = false,
   initialMuteEmojiColors = DEFAULT_MUTE_EMOJI_COLORS,
+  initialWebglEnabled = true,
+  onWebglEnabledChange = () => {},
   initialDefaultCwd = "",
   initialDefaultShell = "",
   onThemeChange = () => {},
@@ -155,6 +159,8 @@ const renderSettingsMenu = ({
         onLigaturesEnabledChange={onLigaturesEnabledChange}
         muteEmojiColors={initialMuteEmojiColors}
         onMuteEmojiColorsChange={onMuteEmojiColorsChange}
+        webglEnabled={initialWebglEnabled}
+        onWebglEnabledChange={onWebglEnabledChange}
         fontSize={initialFontSize}
         onFontSizeChange={onFontSizeChange}
         lineHeight={initialLineHeight}

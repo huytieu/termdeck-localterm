@@ -32,6 +32,8 @@ export interface FontSettingsSectionProps {
   onLigaturesEnabledChange: (enabled: boolean) => void;
   muteEmojiColors: boolean;
   onMuteEmojiColorsChange: (muted: boolean) => void;
+  webglEnabled: boolean;
+  onWebglEnabledChange: (enabled: boolean) => void;
   fontSize: number;
   onFontSizeChange: (size: number) => void;
   lineHeight: number;
@@ -64,6 +66,8 @@ export const FontSettingsSection = ({
   onLigaturesEnabledChange,
   muteEmojiColors,
   onMuteEmojiColorsChange,
+  webglEnabled,
+  onWebglEnabledChange,
   fontSize,
   onFontSizeChange,
   lineHeight,
@@ -202,6 +206,23 @@ export const FontSettingsSection = ({
           aria-label="toggle mute emoji colors"
           checked={muteEmojiColors}
           onCheckedChange={onMuteEmojiColorsChange}
+        />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <Tooltip>
+          <TooltipTrigger render={<span className={SETTINGS_ROW_LABEL_CLASSES} />}>
+            GPU acceleration
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={TOOLTIP_SIDE_OFFSET_PX} className="max-w-xs">
+            Renders terminal text on the GPU (WebGL) for smoother, sharper output. Turn this off if
+            you see flickering or garbled glyphs while scrolling on a HiDPI display; the terminal
+            falls back to the DOM renderer, which is slower but always correct.
+          </TooltipContent>
+        </Tooltip>
+        <Switch
+          aria-label="toggle gpu acceleration"
+          checked={webglEnabled}
+          onCheckedChange={onWebglEnabledChange}
         />
       </div>
     </Field>

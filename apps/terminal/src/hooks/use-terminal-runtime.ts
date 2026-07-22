@@ -147,6 +147,9 @@ interface TerminalRuntimeRefs {
   localEchoRef: CurrentRef<LocalEcho | null>;
   fitAddonRef: CurrentRef<FitAddon | null>;
   webglAddonRef: CurrentRef<WebglAddon | null>;
+  // Assigned to the terminal surface's live WebGL enable/disable setter so the
+  // GPU-acceleration settings effect can toggle the renderer without a reconnect.
+  setWebglEnabledRef: CurrentRef<((enabled: boolean) => void) | null>;
   searchAddonRef: CurrentRef<SearchAddon | null>;
   scrollbarTrackRef: CurrentRef<HTMLDivElement | null>;
   scrollbarThumbRef: CurrentRef<HTMLDivElement | null>;
@@ -184,6 +187,7 @@ interface TerminalRuntimeInitialSettings {
   initialCustomFontFamilyRef: CurrentRef<string>;
   initialNerdFontEnabledRef: CurrentRef<boolean>;
   initialMuteEmojiColorsRef: CurrentRef<boolean>;
+  initialWebglEnabledRef: CurrentRef<boolean>;
   initialFontSizeRef: CurrentRef<number>;
   initialLineHeightRef: CurrentRef<number>;
   initialCursorStyleRef: CurrentRef<"block" | "underline" | "bar">;
@@ -235,6 +239,7 @@ export const useTerminalRuntime = ({
     switchSessionRef,
     spawnFreshSessionRef,
     refocusTerminalRef,
+    setWebglEnabledRef,
     pasteToTerminalRef,
     localEchoRef,
     fitAddonRef,
@@ -272,6 +277,7 @@ export const useTerminalRuntime = ({
     initialCustomFontFamilyRef,
     initialNerdFontEnabledRef,
     initialMuteEmojiColorsRef,
+    initialWebglEnabledRef,
     initialFontSizeRef,
     initialLineHeightRef,
     initialCursorStyleRef,
@@ -431,7 +437,10 @@ export const useTerminalRuntime = ({
     });
     const updateScrollbar = terminalScrollbar.update;
 
-    terminalSurface.loadWebgl();
+    // Expose the live renderer toggle before the initial load so the settings
+    // effect can flip it either way; only load WebGL now if the user has it on.
+    setWebglEnabledRef.current = terminalSurface.setWebglEnabled;
+    if (initialWebglEnabledRef.current) terminalSurface.loadWebgl();
 
     const kittyKeyboardProtocol = registerTerminalKittyKeyboardProtocol(terminal);
     const getKittyFlags = kittyKeyboardProtocol.getFlags;
@@ -1029,6 +1038,7 @@ export const useTerminalRuntime = ({
       localEcho.dispose();
       localEchoRef.current = null;
       terminalSurface.dispose();
+      setWebglEnabledRef.current = null;
       document.title = DEFAULT_DOCUMENT_TITLE;
     };
   }, []);

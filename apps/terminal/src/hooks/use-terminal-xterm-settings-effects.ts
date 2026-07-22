@@ -32,6 +32,8 @@ interface UseTerminalXtermSettingsEffectsParams {
   effectiveFont: TerminalFont;
   effectiveFontFamily: string;
   activeMuteEmojiColors: boolean;
+  activeWebglEnabled: boolean;
+  setWebglEnabledRef: ReadonlySettingsRef<((enabled: boolean) => void) | null>;
   activeLigaturesEnabled: boolean;
   activeFontSize: number;
   activeLineHeight: number;
@@ -56,6 +58,8 @@ export const useTerminalXtermSettingsEffects = ({
   effectiveFont,
   effectiveFontFamily,
   activeMuteEmojiColors,
+  activeWebglEnabled,
+  setWebglEnabledRef,
   activeLigaturesEnabled,
   activeFontSize,
   activeLineHeight,
@@ -108,6 +112,19 @@ export const useTerminalXtermSettingsEffects = ({
   useEffect(() => {
     webglAddonRef.current?.setEmojiColorsMuted(activeMuteEmojiColors);
   }, [activeMuteEmojiColors, webglAddonRef]);
+
+  // GPU-acceleration toggle. Loads the WebGL renderer or falls back to xterm's
+  // DOM renderer live (the escape hatch for the HiDPI-scroll glyph-atlas
+  // corruption in the device-resolution renderer patch). A freshly (re)loaded
+  // WebGL addon is constructed with the initial emoji-mute value, so re-apply
+  // the current one here to keep it consistent across an off/on toggle.
+  useEffect(() => {
+    if (!terminalReady) return;
+    setWebglEnabledRef.current?.(activeWebglEnabled);
+    if (activeWebglEnabled) {
+      webglAddonRef.current?.setEmojiColorsMuted(activeMuteEmojiColors);
+    }
+  }, [terminalReady, activeWebglEnabled, setWebglEnabledRef, webglAddonRef, activeMuteEmojiColors]);
 
   // registerCharacterJoiner/deregisterCharacterJoiner each refresh the whole
   // viewport in xterm core, so toggling re-rasters joined spans without an

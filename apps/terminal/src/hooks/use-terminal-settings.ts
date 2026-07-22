@@ -20,6 +20,7 @@ import {
 } from "@/utils/stored-default-shell";
 import { subscribeStoredLigaturesEnabled } from "@/utils/stored-ligatures-enabled";
 import { subscribeStoredMuteEmojiColors } from "@/utils/stored-mute-emoji-colors";
+import { subscribeStoredWebglEnabled } from "@/utils/stored-webgl-enabled";
 import {
   loadStoredLocalEcho,
   storeStoredLocalEcho,
@@ -91,6 +92,10 @@ export const useTerminalSettings = ({
 }: UseTerminalSettingsParams) => {
   const themeSettings = useTerminalThemeSettings();
   const fontSettings = useTerminalFontSettings();
+  // Assigned by the runtime hook once the terminal surface exists; the WebGL
+  // toggle effect below calls it to load/dispose the renderer live. Null in the
+  // standalone settings panel (no live terminal), where the effect no-ops.
+  const setWebglEnabledRef = useRef<((enabled: boolean) => void) | null>(null);
   const initialCursorStyleRef = useRef<TerminalCursorStyle>(loadStoredTerminalCursorStyle());
   const initialCursorBlinkRef = useRef<boolean>(loadStoredTerminalCursorBlink());
   const initialLocalEchoRef = useRef<boolean>(loadStoredLocalEcho());
@@ -200,6 +205,8 @@ export const useTerminalSettings = ({
     effectiveFont: fontSettings.effectiveFont,
     effectiveFontFamily: fontSettings.effectiveFontFamily,
     activeMuteEmojiColors: fontSettings.activeMuteEmojiColors,
+    activeWebglEnabled: fontSettings.activeWebglEnabled,
+    setWebglEnabledRef,
     activeLigaturesEnabled: fontSettings.activeLigaturesEnabled,
     activeFontSize: fontSettings.activeFontSize,
     activeLineHeight: fontSettings.activeLineHeight,
@@ -224,6 +231,7 @@ export const useTerminalSettings = ({
       subscribeStoredNerdFontEnabled(fontSettings.setActiveNerdFontEnabled),
       subscribeStoredLigaturesEnabled(fontSettings.setActiveLigaturesEnabled),
       subscribeStoredMuteEmojiColors(fontSettings.setActiveMuteEmojiColors),
+      subscribeStoredWebglEnabled(fontSettings.setActiveWebglEnabled),
       subscribeStoredTerminalFontSize(fontSettings.setActiveFontSize),
       subscribeStoredTerminalLineHeight(fontSettings.setActiveLineHeight),
       subscribeStoredTerminalCursorStyle(setActiveCursorStyle),
@@ -248,6 +256,7 @@ export const useTerminalSettings = ({
     fontSettings.setActiveNerdFontEnabled,
     fontSettings.setActiveLigaturesEnabled,
     fontSettings.setActiveMuteEmojiColors,
+    fontSettings.setActiveWebglEnabled,
     fontSettings.setActiveFontSize,
     fontSettings.setActiveLineHeight,
     themeSettings.setActiveCustomThemes,
@@ -261,6 +270,8 @@ export const useTerminalSettings = ({
     initialCustomFontFamilyRef: fontSettings.initialCustomFontFamilyRef,
     initialNerdFontEnabledRef: fontSettings.initialNerdFontEnabledRef,
     initialMuteEmojiColorsRef: fontSettings.initialMuteEmojiColorsRef,
+    initialWebglEnabledRef: fontSettings.initialWebglEnabledRef,
+    setWebglEnabledRef,
     initialFontSizeRef: fontSettings.initialFontSizeRef,
     initialLineHeightRef: fontSettings.initialLineHeightRef,
     initialCursorStyleRef,
@@ -273,6 +284,7 @@ export const useTerminalSettings = ({
     activeNerdFontEnabled: fontSettings.activeNerdFontEnabled,
     activeLigaturesEnabled: fontSettings.activeLigaturesEnabled,
     activeMuteEmojiColors: fontSettings.activeMuteEmojiColors,
+    activeWebglEnabled: fontSettings.activeWebglEnabled,
     activeFontSize: fontSettings.activeFontSize,
     activeLineHeight: fontSettings.activeLineHeight,
     activeCursorStyle,
@@ -296,6 +308,7 @@ export const useTerminalSettings = ({
     handleNerdFontEnabledChange: fontSettings.handleNerdFontEnabledChange,
     handleLigaturesEnabledChange: fontSettings.handleLigaturesEnabledChange,
     handleMuteEmojiColorsChange: fontSettings.handleMuteEmojiColorsChange,
+    handleWebglEnabledChange: fontSettings.handleWebglEnabledChange,
     handleFontSizeChange: fontSettings.handleFontSizeChange,
     handleLineHeightChange: fontSettings.handleLineHeightChange,
     handleCursorStyleChange,

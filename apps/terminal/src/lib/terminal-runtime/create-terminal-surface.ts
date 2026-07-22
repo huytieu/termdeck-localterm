@@ -58,6 +58,11 @@ interface TerminalSurface {
   terminal: XtermTerminal;
   fitAddon: FitAddon;
   loadWebgl: () => void;
+  // Enable (WebGL) or disable (fall back to xterm's built-in DOM renderer) GPU
+  // rendering live, without recreating the terminal or reconnecting the PTY.
+  // The escape hatch for the HiDPI-scroll glyph-atlas corruption in the
+  // backported device-resolution renderer patch.
+  setWebglEnabled: (enabled: boolean) => void;
   dispose: () => void;
 }
 
@@ -168,25 +173,46 @@ export const createTerminalSurface = ({
     };
   };
 
+  // Idempotent: a no-op when the WebGL renderer is already loaded so the
+  // enable-on-toggle path can't stack a second addon on the same terminal.
+  const enableWebgl = () => {
+    if (webglAddonRef.current) return;
+    try {
+      const webglAddon = new WebglAddon({
+        muteEmojiColors: initialMuteEmojiColors,
+      });
+      webglAddon.onContextLoss(() => {
+        if (webglAddonRef.current === webglAddon) webglAddonRef.current = null;
+        outputBatcher.setInteractiveRenderingEnabled(false);
+        webglAddon.dispose();
+      });
+      terminal.loadAddon(webglAddon);
+      webglAddonRef.current = webglAddon;
+      outputBatcher.setInteractiveRenderingEnabled(true);
+    } catch {
+      /* webgl unavailable; xterm falls back to dom renderer */
+    }
+  };
+
   return {
     terminal,
     fitAddon,
-    loadWebgl: () => {
-      try {
-        const webglAddon = new WebglAddon({
-          muteEmojiColors: initialMuteEmojiColors,
-        });
-        webglAddon.onContextLoss(() => {
-          if (webglAddonRef.current === webglAddon) webglAddonRef.current = null;
-          outputBatcher.setInteractiveRenderingEnabled(false);
-          webglAddon.dispose();
-        });
-        terminal.loadAddon(webglAddon);
-        webglAddonRef.current = webglAddon;
-        outputBatcher.setInteractiveRenderingEnabled(true);
-      } catch {
-        /* webgl unavailable; xterm falls back to dom renderer */
+    loadWebgl: enableWebgl,
+    setWebglEnabled: (enabled: boolean) => {
+      if (enabled) {
+        enableWebgl();
+        return;
       }
+      const webglAddon = webglAddonRef.current;
+      if (!webglAddon) return;
+      // Disposing the WebGL addon restores xterm's built-in DOM renderer. Turn
+      // off the synchronous interactive-render fast path (it only exists to pace
+      // WebGL frames) and force a full repaint so the freshly restored DOM
+      // renderer paints the current viewport instead of an emptied canvas.
+      outputBatcher.setInteractiveRenderingEnabled(false);
+      webglAddonRef.current = null;
+      webglAddon.dispose();
+      terminal.refresh(0, terminal.rows - 1);
     },
     dispose: () => {
       searchResultsDisposable.dispose();

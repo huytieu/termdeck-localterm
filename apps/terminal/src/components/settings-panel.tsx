@@ -29,6 +29,7 @@ export const SettingsPanel = () => {
     activeNerdFontEnabled,
     activeLigaturesEnabled,
     activeMuteEmojiColors,
+    activeWebglEnabled,
     activeFontSize,
     activeLineHeight,
     activeCursorStyle,
@@ -51,6 +52,7 @@ export const SettingsPanel = () => {
     handleNerdFontEnabledChange,
     handleLigaturesEnabledChange,
     handleMuteEmojiColorsChange,
+    handleWebglEnabledChange,
     handleFontSizeChange,
     handleLineHeightChange,
     handleCursorStyleChange,
@@ -128,6 +130,8 @@ export const SettingsPanel = () => {
       onLigaturesEnabledChange={handleLigaturesEnabledChange}
       muteEmojiColors={activeMuteEmojiColors}
       onMuteEmojiColorsChange={handleMuteEmojiColorsChange}
+      webglEnabled={activeWebglEnabled}
+      onWebglEnabledChange={handleWebglEnabledChange}
       fontSize={activeFontSize}
       onFontSizeChange={handleFontSizeChange}
       lineHeight={activeLineHeight}
