@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { WikiFileIcon } from "@/components/wiki-file-icon";
 import { openWikiFile } from "@/hooks/use-shell";
 import { fetchSessions } from "@/lib/deck-session";
 import { wikiTreeState } from "@/lib/wiki-tree-state";
@@ -328,7 +329,7 @@ const TreeNode = ({
                 isDirectory ? (
                   <Folder className="size-3.5 shrink-0 text-muted-foreground/70" />
                 ) : (
-                  <File className="size-3.5 shrink-0 text-muted-foreground/50" />
+                  <WikiFileIcon name={name} />
                 )
               }
               onSubmit={(value) => tree.submitRename({ path, name, isDirectory }, value)}
@@ -354,7 +355,7 @@ const TreeNode = ({
                 open ? <FolderOpen className="size-3.5 shrink-0 text-muted-foreground/70" />
                      : <Folder className="size-3.5 shrink-0 text-muted-foreground/70" />
               ) : (
-                <File className="size-3.5 shrink-0 text-muted-foreground/50" />
+                <WikiFileIcon name={name} />
               )}
               <span className="truncate">{name}</span>
             </button>
@@ -996,7 +997,7 @@ export const WikiSidebar = ({ activePath }: { activePath: string | null }) => {
                   onClick={() => openWikiFile(hit.path, hit.line)}
                 >
                   <span className="flex items-center gap-1.5 truncate font-mono text-[11px] text-foreground">
-                    <File className="size-3 shrink-0 text-muted-foreground/50" />
+                    <WikiFileIcon name={name} className="size-3" />
                     {name}
                     <span className="text-muted-foreground/50">:{hit.line}</span>
                   </span>
