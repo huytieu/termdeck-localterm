@@ -1,5 +1,6 @@
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { XTERM_MOUSE_WHEEL_MAX_REPORTS_PER_EVENT } from "../../src/lib/constants";
 import { preserveTerminalMouseWheelMagnitude } from "../../src/utils/preserve-terminal-mouse-wheel-magnitude";
 
 interface FakeCoreMouseEvent {
@@ -61,18 +62,18 @@ const createFakeTerminal = ({
 
 describe("preserveTerminalMouseWheelMagnitude", () => {
   it("emits one independent mouse report for every normalized wheel row", () => {
-    const { mouseService, terminal, triggeredEvents } = createFakeTerminal({ lines: -12 });
+    const { mouseService, terminal, triggeredEvents } = createFakeTerminal({ lines: -4 });
     preserveTerminalMouseWheelMagnitude(terminal);
 
     mouseService._consumeWheelEvent(new WheelEvent("wheel"), 20, 1);
     const didTrigger = mouseService._triggerMouseEvent(createCoreMouseEvent());
 
     expect(didTrigger).toBe(true);
-    expect(triggeredEvents).toHaveLength(12);
+    expect(triggeredEvents).toHaveLength(4);
     expect(triggeredEvents.every((event) => event.col === 4)).toBe(true);
   });
 
-  it("caps one physical event to one terminal viewport", () => {
+  it("caps one physical event's report burst so a flick cannot flood the PTY input queue", () => {
     const { mouseService, terminal, triggeredEvents } = createFakeTerminal({
       lines: 100,
       rows: 24,
@@ -82,7 +83,20 @@ describe("preserveTerminalMouseWheelMagnitude", () => {
     mouseService._consumeWheelEvent(new WheelEvent("wheel"), 20, 1);
     mouseService._triggerMouseEvent(createCoreMouseEvent());
 
-    expect(triggeredEvents).toHaveLength(24);
+    expect(triggeredEvents).toHaveLength(XTERM_MOUSE_WHEEL_MAX_REPORTS_PER_EVENT);
+  });
+
+  it("still caps at the viewport when the terminal is shorter than the burst cap", () => {
+    const { mouseService, terminal, triggeredEvents } = createFakeTerminal({
+      lines: 100,
+      rows: 3,
+    });
+    preserveTerminalMouseWheelMagnitude(terminal);
+
+    mouseService._consumeWheelEvent(new WheelEvent("wheel"), 20, 1);
+    mouseService._triggerMouseEvent(createCoreMouseEvent());
+
+    expect(triggeredEvents).toHaveLength(3);
   });
 
   it("retains one report outside terminal mouse tracking", () => {

@@ -15,6 +15,14 @@ export const TERMINAL_VIEWPORT_WIDTH_STABLE_PX = 20;
 export const XTERM_DEFAULT_SCROLL_SENSITIVITY = 1;
 export const XTERM_TRACKPAD_WHEEL_DELTA_THRESHOLD_PX = 50;
 export const XTERM_TRACKPAD_WHEEL_SCALE = 0.3;
+// One violent wheel event (fast trackpad flick, deltaY 300+px) normalizes to
+// dozens of rows; replaying a mouse report per row floods the PTY input queue
+// (~1KB) faster than a busy full-screen TUI drains it, so the kernel drops
+// bytes mid-escape-sequence — the tail of an SGR report (e.g. "4;81;18M")
+// then leaks into the app as typed text, and the TUI repaints in huge visible
+// jumps. Bound the burst per physical event; ordinary momentum events (1-6
+// rows) pass through unclamped, so nested-TUI scrolling keeps native feel.
+export const XTERM_MOUSE_WHEEL_MAX_REPORTS_PER_EVENT = 6;
 export const DEFAULT_TERMINAL_LINE_HEIGHT = 1.2;
 // xterm.js refuses lineHeight < 1 (throws "lineHeight cannot be less than 1").
 export const TERMINAL_LINE_HEIGHT_MIN = 1.0;

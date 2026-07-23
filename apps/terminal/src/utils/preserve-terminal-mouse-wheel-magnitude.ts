@@ -1,5 +1,7 @@
 import type { IDisposable, Terminal as XtermTerminal } from "@xterm/xterm";
 
+import { XTERM_MOUSE_WHEEL_MAX_REPORTS_PER_EVENT } from "@/lib/constants";
+
 interface XtermCoreMouseEvent {
   col: number;
   row: number;
@@ -48,7 +50,11 @@ export const preserveTerminalMouseWheelMagnitude = (
     pendingWheelReportCount =
       terminal.modes.mouseTrackingMode === "none" || lines === 0
         ? 1
-        : Math.min(Math.max(1, terminal.rows), Math.max(1, Math.floor(Math.abs(lines))));
+        : Math.min(
+            Math.max(1, terminal.rows),
+            XTERM_MOUSE_WHEEL_MAX_REPORTS_PER_EVENT,
+            Math.max(1, Math.floor(Math.abs(lines))),
+          );
     return lines;
   };
   const triggerMouseEvent = (event: XtermCoreMouseEvent): boolean => {
