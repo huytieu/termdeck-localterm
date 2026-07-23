@@ -176,6 +176,43 @@ export class SessionOutputTransport {
     return out;
   }
 
+  // Chain an output-frame send onto the client's per-client FIFO. In "br-ctx"
+  // mode the persistent Brotli flush resolves asynchronously (a tick or more
+  // after the frame was queued), while sub-threshold frames skip compression —
+  // a synchronous send there would jump the wire queue and deliver bytes out
+  // of PTY order (mid-escape-sequence splices painted as garbage rows during
+  // fast full-screen redraws). Every br-ctx frame — raw or compressed — goes
+  // through this chain so wire order always equals PTY order. Errors (encoder
+  // released mid-flight on detach/re-promote) drop the frame, matching the
+  // previous behavior, and never wedge the chain.
+  private enqueueOrderedSend(
+    client: ManagedClient,
+    task: () => Promise<void> | void,
+  ): Promise<void> {
+    const send = client.outputSendChain.then(task).catch(() => undefined);
+    client.outputSendChain = send;
+    return send;
+  }
+
+  private enqueueBrotliCtxFrame(
+    client: ManagedClient,
+    ws: ClientSocket,
+    bytes: Uint8Array<ArrayBuffer>,
+  ): Promise<void> {
+    if (bytes.length < WS_OUTPUT_COMPRESS_THRESHOLD_BYTES) {
+      const frame = this.frameWithHeader(WS_OUTPUT_RAW, bytes);
+      return this.enqueueOrderedSend(client, () => {
+        this.sendOutputBytes(ws, frame);
+      });
+    }
+    const encoder = client.brotliEncoder;
+    if (!encoder) return Promise.resolve();
+    return this.enqueueOrderedSend(client, async () => {
+      const compressed = await encoder.flush(bytes);
+      this.sendOutputBytes(ws, this.frameWithCtxHeader(compressed, bytes.length));
+    });
+  }
+
   async sendOutputFrame(
     ws: ClientSocket,
     bytes: Uint8Array<ArrayBuffer>,
@@ -186,19 +223,12 @@ export class SessionOutputTransport {
       this.sendOutputBytes(ws, bytes);
       return;
     }
-    if (bytes.length < WS_OUTPUT_COMPRESS_THRESHOLD_BYTES) {
-      this.sendOutputBytes(ws, this.frameWithHeader(WS_OUTPUT_RAW, bytes));
+    if (mode === "br-ctx") {
+      await this.enqueueBrotliCtxFrame(client, ws, bytes);
       return;
     }
-    if (mode === "br-ctx") {
-      const encoder = client.brotliEncoder;
-      if (!encoder) return;
-      try {
-        const compressed = await encoder.flush(bytes);
-        this.sendOutputBytes(ws, this.frameWithCtxHeader(compressed, bytes.length));
-      } catch {
-        return;
-      }
+    if (bytes.length < WS_OUTPUT_COMPRESS_THRESHOLD_BYTES) {
+      this.sendOutputBytes(ws, this.frameWithHeader(WS_OUTPUT_RAW, bytes));
       return;
     }
     const compressed = this.compressPayload(bytes, mode);
@@ -229,23 +259,19 @@ export class SessionOutputTransport {
         this.sendOutputBytes(client.ws, bytes);
         continue;
       }
-      if (!compressible) {
-        this.sendOutputBytes(client.ws, this.frameWithHeader(WS_OUTPUT_RAW, bytes));
+      if (mode === "br-ctx") {
+        // Per-client persistent stream: fire-and-forget onto the client's
+        // ordered send chain. The chain — not just the encoder's internal
+        // FIFO — carries sub-threshold raw frames too, so a small frame
+        // arriving right after a large one can't hit the wire first while the
+        // large one is still compressing (the out-of-order splice that painted
+        // garbage rows during fast scrolling). sendOutputBytes still checks
+        // readyState/backpressure at send time.
+        void this.enqueueBrotliCtxFrame(client, client.ws, bytes);
         continue;
       }
-      if (mode === "br-ctx") {
-        // Per-client persistent stream: the flush is async (chained per encoder
-        // in PTY order), so fire-and-forget here — the chain preserves order
-        // across this client's frames and sendOutputBytes checks
-        // readyState/backpressure at send time.
-        const encoder = client.brotliEncoder;
-        if (!encoder) continue;
-        void encoder
-          .flush(bytes)
-          .then((compressed) =>
-            this.sendOutputBytes(client.ws, this.frameWithCtxHeader(compressed, bytes.length)),
-          )
-          .catch(() => undefined);
+      if (!compressible) {
+        this.sendOutputBytes(client.ws, this.frameWithHeader(WS_OUTPUT_RAW, bytes));
         continue;
       }
       if (mode === "br") {

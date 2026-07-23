@@ -166,6 +166,7 @@ export class SessionClientHub {
       coordinator,
       compressMode: null,
       brotliEncoder: null,
+      outputSendChain: Promise.resolve(),
       terminalResponder: false,
     };
     coordinator.add(ws);
@@ -246,6 +247,9 @@ export class SessionClientHub {
       client.brotliEncoder = null;
     }
     if (compress === "br-ctx") client.brotliEncoder = makeBrotliEncoder(WS_OUTPUT_BROTLI_QUALITY);
+    // Fresh encoder = fresh stream: drop any stale ordered-send links from a
+    // prior attach so an old rejected flush can't delay the new stream.
+    client.outputSendChain = Promise.resolve();
     // Tell the client the chosen compress mode BEFORE the scrollback replay so
     // it knows how to parse the compressed replay frames. A back-compat server
     // that doesn't know "br-ctx" never sends this frame, so an old-server +

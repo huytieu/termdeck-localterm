@@ -112,6 +112,14 @@ export interface ManagedClient {
   coordinator: GitMetadataCoordinator | null;
   compressMode: CompressMode;
   brotliEncoder: BrotliEncoder | null;
+  // Per-client FIFO for output frames in "br-ctx" mode. The persistent Brotli
+  // flush is async (resolves a tick later), while sub-threshold frames skip
+  // compression entirely — sending those synchronously would put them on the
+  // wire AHEAD of an earlier frame still compressing, splicing the PTY byte
+  // stream out of order mid-escape-sequence (visible as garbage rows during
+  // fast full-screen redraws, e.g. scrolling a TUI). Every output frame for a
+  // br-ctx client chains through this promise so wire order == PTY order.
+  outputSendChain: Promise<void>;
   terminalResponder: boolean;
 }
 
