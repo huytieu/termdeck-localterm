@@ -65,23 +65,27 @@ function colorValue(text: string): string | null {
   return null;
 }
 
-/** Rewrite `[[target|label]]` → `[label](wiki:target)` so remark makes a link.
- *  Code spans / fenced blocks are left untouched (wikilinks there are literal). */
-function preprocessWikilinks(src: string): string {
+/** Rewrite `[[target|label]]` → `[label](wiki:target)` so remark makes a link,
+ *  and drop HTML comments, which must never reach the reading surface (tools
+ *  anchor metadata in them, e.g. `<!--dd:id-->` in a synced task list).
+ *  Code spans / fenced blocks are left untouched (both are literal there). */
+function preprocessMarkdown(src: string): string {
   // Split on fenced blocks (```…```) and inline code (`…`); the capture group
   // keeps those delimiters as odd-indexed segments, which we pass through.
   return src
     .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
     .map((part, i) => {
       if (i % 2 === 1) return part;
-      return part.replace(
-        /\[\[([^\]|\n]+?)(?:\|([^\]\n]+?))?\]\]/g,
-        (_m, target: string, label?: string) => {
-          const t = target.trim();
-          const l = (label ?? target).trim();
-          return `[${l}](wiki:${encodeURIComponent(t)})`;
-        },
-      );
+      return part
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(
+          /\[\[([^\]|\n]+?)(?:\|([^\]\n]+?))?\]\]/g,
+          (_m, target: string, label?: string) => {
+            const t = target.trim();
+            const l = (label ?? target).trim();
+            return `[${l}](wiki:${encodeURIComponent(t)})`;
+          },
+        );
     })
     .join("");
 }
@@ -322,7 +326,7 @@ export const Markdown = ({
   return (
     <div className="whitespace-normal break-words">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {preprocessWikilinks(children)}
+        {preprocessMarkdown(children)}
       </ReactMarkdown>
     </div>
   );
