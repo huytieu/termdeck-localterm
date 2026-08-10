@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { BookText, Moon, Settings, Shapes, SquareTerminal, Sun } from "lucide-react";
+import { BookText, CalendarCheck, Moon, Settings, SquareTerminal, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { switchMode, type ShellMode } from "@/hooks/use-shell";
 import { currentTheme, subscribeTheme, toggleTheme } from "@/lib/theme";
@@ -31,7 +31,7 @@ const Item = ({
   </button>
 );
 
-// Leftmost rail — the mode switch (Terminal / Wiki), VS Code activity-bar style.
+// Leftmost rail — the mode switch (Terminal / Wiki / Planner), VS Code activity-bar style.
 export const ActivityBar = ({ mode }: { mode: ShellMode }) => (
   <nav className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-background py-2">
     <span className="mb-1 font-mono text-[10px] font-bold tracking-tight text-muted-foreground">TD</span>
@@ -48,10 +48,10 @@ export const ActivityBar = ({ mode }: { mode: ShellMode }) => (
       onClick={() => switchMode("wiki")}
     />
     <Item
-      active={mode === "canvas"}
-      label="Canvas"
-      icon={<Shapes className="size-5" />}
-      onClick={() => switchMode("canvas")}
+      active={mode === "planner"}
+      label="Planner"
+      icon={<CalendarCheck className="size-5" />}
+      onClick={() => switchMode("planner")}
     />
     {/* Theme toggle + Settings pinned to the bottom, VS Code style. */}
     <div className="mt-auto w-full">

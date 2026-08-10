@@ -42,7 +42,19 @@ export const analyzeToken = (token: string): TokenAnalysis | null => {
   while (end > start && TRAILING_PUNCTUATION.has(token[end - 1])) end--;
   if (end - start < 2) return null;
 
-  const candidate = token.slice(start, end);
+  let candidate = token.slice(start, end);
+  // A label glued to the path with no space, as Ink TUIs print attachments:
+  // `[image]/private/tmp/…`. The opening bracket was stripped above, which
+  // would otherwise leave the link pointing at `image]/private/…`. Drop the
+  // label and its closer so the link starts at the real path. Only when we
+  // actually stripped an opener and the label carries no separator of its own.
+  if (start > 0) {
+    const closerIndex = candidate.search(/[)\]}>]\//);
+    if (closerIndex !== -1 && !candidate.slice(0, closerIndex).includes("/")) {
+      start += closerIndex + 1;
+      candidate = token.slice(start, end);
+    }
+  }
   // URLs are WebLinksAddon's job; also skips scheme-ish tokens like git@host:…
   if (candidate.includes("://")) return null;
 
@@ -90,6 +102,46 @@ export const analyzeToken = (token: string): TokenAnalysis | null => {
   };
 };
 
+const lastSegmentOf = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+
+// True when `headRow` is the tail of a path that `tailRow` started — a break the
+// APP made, not the terminal. Ink TUIs (Claude Code and friends) wrap their own
+// output: a path too long for the box is cut mid-token with a real newline and
+// the remainder is re-indented, so xterm sees two unwrapped rows and the link
+// would stop at the break, opening a truncated (wrong) path.
+//
+// Deliberately narrow, because a wrong stitch costs a working link:
+//   - the head must be indented (a flush-left line is its own thought),
+//   - the break must have been FORCED (the head's first token could not have
+//     fit after the tail on that row) — this is what keeps prose like an
+//     indented "and/or …" following a directory path from being swallowed,
+//   - the tail must look TRUNCATED: a path whose last segment has no extension
+//     and no :line suffix,
+//   - the head must read as the REST of it: not itself anchored, and the two
+//     joined must analyze as a path that names a file (or carries a separator).
+export const isHardWrapContinuation = (tailRow: string, headRow: string, cols: number): boolean => {
+  const tail = tailRow.replace(/\s+$/, "");
+  if (!tail) return false;
+  const head = headRow.replace(/\s+$/, "");
+  const indent = head.length - head.replace(/^\s+/, "").length;
+  if (indent === 0) return false;
+
+  const headToken = head.trim().split(/\s+/)[0] ?? "";
+  const tailToken = tail.split(/\s+/).pop() ?? "";
+  if (!headToken || !tailToken) return false;
+  if (tail.length + 1 + headToken.length <= cols) return false;
+  if (!tailToken.includes("/") || tailToken.endsWith("/")) return false;
+
+  const tailAnalysis = analyzeToken(tailToken);
+  if (!tailAnalysis || tailAnalysis.match.line !== null) return false;
+  if (LAST_SEGMENT_HAS_EXTENSION.test(lastSegmentOf(tailAnalysis.match.path))) return false;
+
+  if (/^([/~]|\.{1,2}\/)/.test(headToken)) return false;
+  const joined = analyzeToken(tailToken + headToken);
+  if (!joined) return false;
+  return LAST_SEGMENT_HAS_EXTENSION.test(lastSegmentOf(joined.match.path)) || headToken.includes("/");
+};
+
 interface CellPosition {
   x: number;
   y: number;
@@ -105,26 +157,40 @@ export class FileLinkProvider implements ILinkProvider {
     private readonly onOpen: OpenFileHandler,
   ) {}
 
+  // Whether row `y` continues row `y - 1` across a break the app made itself
+  // (not a terminal wrap). Terminal wraps are `isWrapped` and handled directly.
+  private continuesPreviousRow(y: number): boolean {
+    const buffer = this.terminal.buffer.active;
+    if (y <= 0) return false;
+    const line = buffer.getLine(y);
+    const previous = buffer.getLine(y - 1);
+    if (!line || !previous || line.isWrapped) return false;
+    return isHardWrapContinuation(
+      previous.translateToString(true),
+      line.translateToString(false),
+      this.terminal.cols,
+    );
+  }
+
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
     const buffer = this.terminal.buffer.active;
     const requestedRow = bufferLineNumber - 1;
     if (!buffer.getLine(requestedRow)) return callback(undefined);
 
-    // Expand to the full wrapped-line group containing the requested row so a
-    // path split across visual rows still matches as one string.
+    // Expand to the full logical line containing the requested row — terminal
+    // wraps (`isWrapped`) plus app-made breaks mid-path — so a path split
+    // across visual rows still matches as one string.
+    const joined = (y: number): boolean =>
+      Boolean(buffer.getLine(y)?.isWrapped) || this.continuesPreviousRow(y);
     let startRow = requestedRow;
-    while (
-      startRow > 0 &&
-      requestedRow - startRow < MAX_WRAPPED_ROWS &&
-      buffer.getLine(startRow)?.isWrapped
-    ) {
+    while (startRow > 0 && requestedRow - startRow < MAX_WRAPPED_ROWS && joined(startRow)) {
       startRow--;
     }
     let endRow = requestedRow;
     while (
       endRow + 1 < buffer.length &&
       endRow - startRow < MAX_WRAPPED_ROWS &&
-      buffer.getLine(endRow + 1)?.isWrapped
+      joined(endRow + 1)
     ) {
       endRow++;
     }
@@ -137,7 +203,18 @@ export class FileLinkProvider implements ILinkProvider {
     for (let y = startRow; y <= endRow; y++) {
       const bufferLine = buffer.getLine(y);
       if (!bufferLine) break;
-      for (let x = 0; x < bufferLine.length; x++) {
+      // Across an app-made break the path is contiguous in intent but padded on
+      // screen: the tail row ends short of the edge and the head row is
+      // re-indented. Drop that padding so the two halves concatenate into one
+      // token instead of two.
+      const stitchedToPrevious = y > startRow && !bufferLine.isWrapped;
+      const stitchedToNext = y < endRow && !buffer.getLine(y + 1)?.isWrapped;
+      let xStart = 0;
+      let xEnd = bufferLine.length - 1;
+      const isBlank = (x: number) => (bufferLine.getCell(x)?.getChars() ?? "").trim() === "";
+      if (stitchedToPrevious) while (xStart <= xEnd && isBlank(xStart)) xStart++;
+      if (stitchedToNext) while (xEnd >= xStart && isBlank(xEnd)) xEnd--;
+      for (let x = xStart; x <= xEnd; x++) {
         const cell = bufferLine.getCell(x);
         if (!cell) continue;
         const width = cell.getWidth();

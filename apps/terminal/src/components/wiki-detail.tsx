@@ -1189,12 +1189,12 @@ export const WikiDetail = ({
                 <Pencil className="size-3.5" />
               </Button>
             )}
-            {remote && (
+            {(remote || isGithub) && (
               <Button
                 variant="ghost"
                 size="icon-sm"
-                aria-label="open in browser"
-                title="Open in a browser tab"
+                aria-label={isGithub ? "open on github" : "open in browser"}
+                title={isGithub ? "Open on GitHub" : "Open in a browser tab"}
                 onClick={() => window.open(path, "_blank", "noopener,noreferrer")}
               >
                 <ExternalLink className="size-3.5" />

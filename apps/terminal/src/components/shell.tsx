@@ -11,6 +11,7 @@ import { readingMode, subscribeReadingMode } from "@/lib/reading-mode";
 import { ActivityBar } from "@/components/activity-bar";
 import { TermSidebar } from "@/components/term-sidebar";
 import { WikiSidebar } from "@/components/wiki-sidebar";
+import { PlannerPanel } from "@/components/planner-panel";
 import { ArtifactDrawer, type ArtifactMode } from "@/components/artifact-drawer";
 
 // The file viewer (WikiDetail) drags in react-markdown + shiki (+ TipTap when
@@ -20,9 +21,6 @@ import { ArtifactDrawer, type ArtifactMode } from "@/components/artifact-drawer"
 const WikiDetail = lazy(() =>
   import("@/components/wiki-detail").then((m) => ({ default: m.WikiDetail })),
 );
-// tldraw is a ~2MB chunk (editor + its own CSS); the canvas mode is the only
-// consumer, so it loads on first switch, never on the terminal landing path.
-const Canvas = lazy(() => import("@/components/canvas").then((m) => ({ default: m.Canvas })));
 import { Grid } from "@/components/grid";
 import { Terminal } from "@/components/terminal";
 import { SettingsPanel } from "@/components/settings-panel";
@@ -36,10 +34,15 @@ const SIDEBAR_STORAGE_KEY = "termdeck:sidebarWidth";
 const ARTIFACT_MIN = 360;
 const ARTIFACT_DEFAULT = 720;
 const ARTIFACT_STORAGE_KEY = "termdeck:artifactWidth";
-const ARTIFACT_MODE_KEY = "termdeck:artifactMode";
+// v2: the default flipped from "layover" to "push" (dock/split). The key moved
+// with it so the new default actually lands for anyone who had toggled before —
+// their own choice from here on still sticks.
+const ARTIFACT_MODE_KEY = "termdeck:artifactMode.v2";
 
+// Docked (push) by default: overlaying the terminal hides the very output the
+// artifact was opened from, so following along means the two sit side by side.
 const readStoredArtifactMode = (): ArtifactMode =>
-  window.localStorage.getItem(ARTIFACT_MODE_KEY) === "push" ? "push" : "layover";
+  window.localStorage.getItem(ARTIFACT_MODE_KEY) === "layover" ? "layover" : "push";
 
 const readStoredWidth = (): number => {
   const saved = Number(window.localStorage.getItem(SIDEBAR_STORAGE_KEY));
@@ -123,6 +126,19 @@ export const Shell = () => {
       return next;
     });
 
+  // The drawer belongs to the terminal it was opened from — its SESSION chip
+  // links back there, and "chat about this" routes selections to it. Switching
+  // to another session (or the grid, or another mode) therefore closes it
+  // instead of parking a stale file over the new shell.
+  const shownSid = useRef(sid);
+  useEffect(() => {
+    const previous = shownSid.current;
+    shownSid.current = sid;
+    if (previous === sid || !artifactPath) return;
+    setArtifactExpanded(false);
+    closeArtifact();
+  }, [sid, artifactPath]);
+
   // A file clicked inside an embedded terminal tile (iframe) posts here; open it
   // in the artifact drawer (never navigate). Same-origin only.
   useEffect(() => {
@@ -174,10 +190,8 @@ export const Shell = () => {
         const detail =
           mode === "settings" ? (
             <SettingsPanel />
-          ) : mode === "canvas" ? (
-            <Suspense fallback={<div className="h-full bg-background" />}>
-              <Canvas />
-            </Suspense>
+          ) : mode === "planner" ? (
+            <PlannerPanel />
           ) : mode === "term" ? (
             sid ? (
               <Terminal key={sid} />
