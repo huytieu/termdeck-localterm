@@ -17,8 +17,12 @@ export const PlannerPanel = () => {
     let cancelled = false;
     const ping = async () => {
       try {
-        const res = await fetch(`${PLANNER_URL}/api/health`, { cache: "no-store" });
-        if (!cancelled) setHealth(res.ok ? "up" : "down");
+        // DayDeck sends no CORS headers, so a normal fetch from this origin is
+        // blocked even when the tunnel is up. An opaque no-cors fetch resolves
+        // for any HTTP response and only rejects on a real network error —
+        // exactly the "is the tunnel alive" signal we need.
+        await fetch(`${PLANNER_URL}/api/health`, { cache: "no-store", mode: "no-cors" });
+        if (!cancelled) setHealth("up");
       } catch {
         if (!cancelled) setHealth("down");
       }
